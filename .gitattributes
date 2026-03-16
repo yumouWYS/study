@@ -1,0 +1,62 @@
+# ===================== 核心规则：UE项目通用 =====================
+# 1. 强制用Git LFS追踪的大文件（UE核心资产）
+*.uasset filter=lfs diff=lfs merge=lfs -text
+*.umap filter=lfs diff=lfs merge=lfs -text
+*.uproject filter=lfs diff=lfs merge=lfs -text
+*.uplugin filter=lfs diff=lfs merge=lfs -text
+*.fbx filter=lfs diff=lfs merge=lfs -text
+*.3ds filter=lfs diff=lfs merge=lfs -text
+*.blend filter=lfs diff=lfs merge=lfs -text
+*.obj filter=lfs diff=lfs merge=lfs -text
+*.png filter=lfs diff=lfs merge=lfs -text
+*.jpg filter=lfs diff=lfs merge=lfs -text
+*.jpeg filter=lfs diff=lfs merge=lfs -text
+*.tga filter=lfs diff=lfs merge=lfs -text
+*.bmp filter=lfs diff=lfs merge=lfs -text
+*.wav filter=lfs diff=lfs merge=lfs -text
+*.mp3 filter=lfs diff=lfs merge=lfs -text
+*.ogg filter=lfs diff=lfs merge=lfs -text
+*.mp4 filter=lfs diff=lfs merge=lfs -text
+*.mov filter=lfs diff=lfs merge=lfs -text
+*.exe filter=lfs diff=lfs merge=lfs -text
+*.dll filter=lfs diff=lfs merge=lfs -text
+*.so filter=lfs diff=lfs merge=lfs -text
+*.lib filter=lfs diff=lfs merge=lfs -text
+*.pak filter=lfs diff=lfs merge=lfs -text
+*.bin filter=lfs diff=lfs merge=lfs -text
+*.otf filter=lfs diff=lfs merge=lfs -text
+*.ttf filter=lfs diff=lfs merge=lfs -text
+
+# 2. 文本文件（强制LF换行，支持diff/merge）
+*.ini text eol=lf
+*.config text eol=lf
+*.cpp text eol=lf
+*.h text eol=lf
+*.hpp text eol=lf
+*.cs text eol=lf
+*.hlsl text eol=lf
+*.glsl text eol=lf
+*.bat text eol=crlf  # Windows批处理保留CRLF
+*.sh text eol=lf     # Shell脚本强制LF
+*.md text eol=lf
+*.txt text eol=lf
+*.json text eol=lf
+*.xml text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+
+# 3. UE特殊文件（避免冲突）
+*.uprojectdirs text eol=lf
+*.ini merge=union  # INI文件合并时保留双方内容
+*.Build.cs merge=union
+*.Target.cs merge=union
+
+# 4. 排除无需追踪的文件（可选，配合.gitignore）
+*.log -filter -diff -merge -text
+*.bak -filter -diff -merge -text
+*.tmp -filter -diff -merge -text
+*.sav -filter -diff -merge -text
+DerivedDataCache/ -filter -diff -merge -text
+Saved/ -filter -diff -merge -text
+Intermediate/ -filter -diff -merge -text
+Binaries/ -filter -diff -merge -text
