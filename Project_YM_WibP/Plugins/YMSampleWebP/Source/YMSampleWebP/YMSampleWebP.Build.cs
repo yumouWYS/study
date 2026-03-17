@@ -10,15 +10,20 @@ public class YMSampleWebP : ModuleRules
 		
 		PublicIncludePaths.AddRange(
 			new string[] {
-				// ... add public include paths required here ...
-			}
+				"$(ModuleDir)/Public/Core",
+                "$(ModuleDir)/Public/Subsystem",
+                "$(ModuleDir)/Public/Type",
+            }
 			);
 				
 		
 		PrivateIncludePaths.AddRange(
 			new string[] {
-				// ... add other private include paths required here ...
-			}
+                "YMSampleWebP/Public/Core",
+                "YMSampleWebP/Public/Log",
+                "YMSampleWebP/Public/Subsystem",
+                "YMSampleWebP/Public/Type",
+            }
 			);
 			
 		
@@ -26,8 +31,10 @@ public class YMSampleWebP : ModuleRules
 			new string[]
 			{
 				"Core",
+				"CoreUObject",
 				"YMSampleWebPLibrary",
-				"Projects"
+				"Projects",
+				"Engine"
 				// ... add other public dependencies that you statically link with here ...
 			}
 			);

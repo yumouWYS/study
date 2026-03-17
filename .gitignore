@@ -31,7 +31,11 @@
 *.lai
 *.la
 *.a
-*.lib
+
+# 只忽略特定目录下的 .lib 文件
+Binaries/**/*.lib
+Build/**/*.lib
+Intermediate/**/*.lib
 
 # Executables
 *.exe
