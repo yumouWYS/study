@@ -43,6 +43,7 @@ public class YMSampleWebP : ModuleRules
 		PrivateDependencyModuleNames.AddRange(
 			new string[]
 			{
+				"RenderCore"
 				// ... add private dependencies that you statically link with here ...	
 			}
 			);

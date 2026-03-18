@@ -9,14 +9,10 @@
 
 #endif
 
-struct FYMSampleWebPCore {
-
-};
-
 bool FYMSampleWebPLib::GenerateWebpByRGBA(
 	const char* InWebpSavePath,
 	const unsigned char* InRGBAData,
-	int InWidch,
+	int InWidth,
 	int InHeight,
 	float InQualityFactor
 )
@@ -32,13 +28,33 @@ bool FYMSampleWebPLib::GenerateWebpByRGBA(
 		InQualityFactor = 100;
 	}
 
+	uint8_t* Output = nullptr;
 
+	size_t Size = WebPEncodeBGRA(InRGBAData, InWidth, InHeight, InWidth * 4, InQualityFactor, &Output);
 
+	if (Size == 0)
+	{
+		return false;
+	}
 
+	FILE* FDes = fopen(InWebpSavePath, "wb");
 
+	if (FDes)
+	{
+		fwrite(Output, Size, 1, FDes);
+		fclose(FDes);
+	}
+	else
+	{
+		WebPFree(Output);
+		return false;
+	}
 
-#endif
+	WebPFree(Output);
+	return true;
 
+#else
 
 	return false;
+#endif
 }
