@@ -65,6 +65,7 @@ Build/
 
 # 编辑器配置/缓存
 Saved/
+HostProject/
 Intermediate/
 Plugins/**/Intermediate/
 DerivedDataCache/

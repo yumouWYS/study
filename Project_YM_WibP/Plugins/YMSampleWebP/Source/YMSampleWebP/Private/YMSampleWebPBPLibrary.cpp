@@ -1,11 +1,16 @@
 #include "YMSampleWebPBPLibrary.h"
+#include "YMSampleWebPLog.h"
+#include "YMSampleMultiShotWebPSubsystem.h"
+#include "YMSampleWebPCore.h"
 
 #include "encode.h"
 #include "decode.h"
 #include "demux.h"
 #include "mux.h"
 
-#include "YMSampleWebPLog.h"
+#include "Kismet/GameplayStatics.h"
+#include "Engine/GameInstance.h"
+
 
 bool UYMSampleWebPBPLibrary::bAuth = false;
 
@@ -28,4 +33,80 @@ bool UYMSampleWebPBPLibrary::GetYMSampleWebPVersion(FString& OutVersionInfo)
 void UYMSampleWebPBPLibrary::SetAuth()
 {
     bAuth = true;
+}
+
+void UYMSampleWebPBPLibrary::BeginRecord(
+    UObject* WorldContextObject,
+    FString InGeneratedWebpPicturesPath,
+    FYMSampleWebpPictureInformation InWebpPictureInformation,
+    bool& bBegin
+)
+{
+    bBegin = false;
+    if (!WorldContextObject)
+    {
+        return;
+    }
+    if (!WorldContextObject->GetWorld())
+    {
+        return;
+    }
+
+    UGameInstance* GameInstance = UGameplayStatics::GetGameInstance(WorldContextObject);
+
+    UYMSampleMultiShotWebPSubsystem* YMWebpMultiShotSubsystem = GameInstance->GetSubsystem<UYMSampleMultiShotWebPSubsystem>();
+
+    TSharedPtr<FYMSampleWebpPictureInformation> WebpPictureInfomationPtr = MakeShareable(new FYMSampleWebpPictureInformation(InWebpPictureInformation));
+    
+    bBegin = YMWebpMultiShotSubsystem->BeginRecord(InGeneratedWebpPicturesPath, WebpPictureInfomationPtr);
+}
+
+void UYMSampleWebPBPLibrary::BeginRecordFullViewport(
+    UObject* WorldContextObject,
+    FString InGeneratedWebpPicturesPath,
+    bool& bBegin
+)
+{
+    bBegin = false;
+    if (!WorldContextObject)
+    {
+        return;
+    }
+    if (!WorldContextObject->GetWorld())
+    {
+        return;
+    }
+
+    UGameInstance* GameInstance = UGameplayStatics::GetGameInstance(WorldContextObject);
+
+    UYMSampleMultiShotWebPSubsystem* YMWebpMultiShotSubsystem = GameInstance->GetSubsystem<UYMSampleMultiShotWebPSubsystem>();
+
+    FVector2D ViewportSize;
+
+    if (FYMSampleWebPCore::GetViewportSize(WorldContextObject, ViewportSize))
+    {
+        TSharedPtr<FYMSampleWebpPictureInformation> WebpPictureInfomationPtr = MakeShareable(new FYMSampleWebpPictureInformation(0,0,ViewportSize.X-1,ViewportSize.Y-1));
+
+        bBegin = YMWebpMultiShotSubsystem->BeginRecord(InGeneratedWebpPicturesPath, WebpPictureInfomationPtr);
+    }
+}
+
+void UYMSampleWebPBPLibrary::EndRecord(
+    UObject* WorldContextObject,
+    FYMWebpFinishGenerateWebp InfinishWebpBPDelegete
+)
+{
+    if (!WorldContextObject)
+    {
+        return;
+    }
+    if (!WorldContextObject->GetWorld())
+    {
+        return;
+    }
+
+    UGameInstance* GameInstance = UGameplayStatics::GetGameInstance(WorldContextObject);
+    UYMSampleMultiShotWebPSubsystem* YMWebpMultiShotSubsystem = GameInstance->GetSubsystem<UYMSampleMultiShotWebPSubsystem>();
+
+    YMWebpMultiShotSubsystem->EndRecord(InfinishWebpBPDelegete);
 }

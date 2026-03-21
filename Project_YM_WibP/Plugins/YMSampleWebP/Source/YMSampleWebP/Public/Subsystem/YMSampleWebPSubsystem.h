@@ -3,6 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Subsystems/GameInstanceSubsystem.h"
 #include "YMSampleWebPSubsystem.generated.h"
 
 //
@@ -11,7 +12,7 @@ DECLARE_DELEGATE_OneParam(FYMSampleWebPOneShotCallBack, bool);
 DECLARE_DYNAMIC_DELEGATE_OneParam(FYMSampleWebPOneShotCallBackBP, bool, bGenerateWebp);
 
 UCLASS()
-class UYMSampleWebPOneShotSubsystem : public UGameInstanceSubsystem
+class YMSAMPLEWEBP_API UYMSampleWebPOneShotSubsystem : public UGameInstanceSubsystem
 {
 	GENERATED_BODY()
 

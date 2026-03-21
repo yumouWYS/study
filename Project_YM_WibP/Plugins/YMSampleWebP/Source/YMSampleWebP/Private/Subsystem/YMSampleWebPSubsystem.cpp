@@ -1,6 +1,7 @@
 #include "YMSampleWebPSubsystem.h"
 #include "YMSampleWebPCore.h"
 #include "Async/Async.h"
+#include "Misc/Paths.h"
 
 bool UYMSampleWebPOneShotSubsystem::ShouldCreateSubsystem(UObject* Outer) const
 {
