@@ -135,6 +135,55 @@ bool FYMSampleWebPCore::GenerateDynamicWebpPicture(
 	return Result;
 }
 
+bool FYMSampleWebPCore::LoadDynamicWebpPicture(
+	const FString& InPicturePath,
+	TArray<TArray<FColor>>& OutPivtureColors,
+	TArray<int32>& OutWebpTimestepMillisecond,
+	int32& OutWebpWidth,
+	int32& OutWebpHeight
+)
+{
+	if (!CheckWebpPicturePath(InPicturePath))
+	{
+		return false;
+	}
+
+	OutPivtureColors.Empty();
+	OutWebpTimestepMillisecond.Empty();
+
+	std::vector<const unsigned char*> OutRGBADatas;
+	std::vector<int> OutTimestamps_ms;
+
+	bool bLoadWebp = FYMSampleWebPLib::LoadDynamicWebpPictureByRGBA(
+		TCHAR_TO_ANSI(*InPicturePath),
+		OutRGBADatas,
+		OutTimestamps_ms,
+		OutWebpWidth,
+		OutWebpHeight
+	);
+
+	if (!bLoadWebp)
+	{
+		return false;
+	}
+
+	OutPivtureColors.AddDefaulted(OutRGBADatas.size());
+	OutWebpTimestepMillisecond.AddDefaulted(OutTimestamps_ms.size());
+
+	for (int32 WebpIndex = 0; WebpIndex < OutRGBADatas.size(); WebpIndex++)
+	{
+		TArray<FColor>& OneWebpColor = OutPivtureColors[WebpIndex];
+		OneWebpColor.AddDefaulted(OutWebpWidth * OutWebpHeight);
+
+		FMemory::Memcpy(OneWebpColor.GetData(), OutRGBADatas[WebpIndex], OutWebpWidth * OutWebpHeight * 4);
+		OutWebpTimestepMillisecond[WebpIndex] = OutTimestamps_ms[WebpIndex];
+
+		free((void*)OutRGBADatas[WebpIndex]);
+	}
+
+	return true;
+}
+
 bool FYMSampleWebPCore::CheckWebpPicturePath(const FString& InPicturePath)
 {
 	FString Extension = FPaths::GetExtension(InPicturePath);

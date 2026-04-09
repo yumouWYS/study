@@ -1,12 +1,15 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
-
+#include "Engine/Texture2D.h"
 #include "CoreMinimal.h"
 #include "YMSampleWebPType.generated.h"
 
 
 DECLARE_DYNAMIC_DELEGATE_OneParam(FYMWebpFinishGenerateWebp, bool, bFinishGanerate);
+
+
+DECLARE_DYNAMIC_DELEGATE_FourParams(FYMLoadAndShowWebp, bool, bLoad, UTexture2D*, OutWebpPicture, int32, WebpTidth, int32, WebpHeight);
 
 
 USTRUCT(BlueprintType)
@@ -46,5 +49,14 @@ enum class EYMSampleWebpProcessType :uint8
 	None,
 	Recording,
 	Generating,
+	Max
+};
+
+UENUM()
+enum class EYMSampleWebpLoadAndShowType :uint8
+{
+	None,
+	Loading,
+	Showing,
 	Max
 };

@@ -43,6 +43,18 @@ public:
 		FYMWebpFinishGenerateWebp InfinishWebpBPDelegete
 	);
 
+	UFUNCTION(BlueprintCallable, meta = (WorldContext = "WorldContextObject", DisplayName = "LoadWebp"), Category = "YMSampleWebP")
+	static void LoadWebp(
+		UObject* WorldContextObject,
+		FYMLoadAndShowWebp InLoadAndShowWebpDelegate,
+		FString InWebpFilePath
+	);
+
+	UFUNCTION(BlueprintCallable, meta = (WorldContext = "WorldContextObject", DisplayName = "FreeWebp"), Category = "YMSampleWebP")
+	static void FreeWebp(
+		UObject* WorldContextObject
+	);
+
 
 protected:
 	static bool bAuth;

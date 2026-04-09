@@ -1,6 +1,7 @@
 #include "YMSampleWebPBPLibrary.h"
 #include "YMSampleWebPLog.h"
 #include "YMSampleMultiShotWebPSubsystem.h"
+#include "YMSampleShowMultiSubsystem.h"
 #include "YMSampleWebPCore.h"
 
 #include "encode.h"
@@ -109,4 +110,38 @@ void UYMSampleWebPBPLibrary::EndRecord(
     UYMSampleMultiShotWebPSubsystem* YMWebpMultiShotSubsystem = GameInstance->GetSubsystem<UYMSampleMultiShotWebPSubsystem>();
 
     YMWebpMultiShotSubsystem->EndRecord(InfinishWebpBPDelegete);
+}
+
+void UYMSampleWebPBPLibrary::LoadWebp(UObject* WorldContextObject, FYMLoadAndShowWebp InLoadAndShowWebpDelegate, FString InWebpFilePath)
+{
+    if (!WorldContextObject)
+    {
+        InLoadAndShowWebpDelegate.ExecuteIfBound(false, nullptr, -1, -1);
+        return;
+    }
+    if (!WorldContextObject->GetWorld())
+    {
+        InLoadAndShowWebpDelegate.ExecuteIfBound(false, nullptr, -1, -1);
+        return;
+    }
+
+    UGameInstance* GameInstance = UGameplayStatics::GetGameInstance(WorldContextObject);
+    UYMSampleShowMultiSubsystem* YMShowMultiSubsystem = GameInstance->GetSubsystem<UYMSampleShowMultiSubsystem>();
+    YMShowMultiSubsystem->LoadWebp(InLoadAndShowWebpDelegate, InWebpFilePath);
+}
+
+void UYMSampleWebPBPLibrary::FreeWebp(UObject* WorldContextObject)
+{
+    if (!WorldContextObject)
+    {
+        return;
+    }
+    if (!WorldContextObject->GetWorld())
+    {
+        return;
+    }
+
+    UGameInstance* GameInstance = UGameplayStatics::GetGameInstance(WorldContextObject);
+    UYMSampleShowMultiSubsystem* YMShowMultiSubsystem = GameInstance->GetSubsystem<UYMSampleShowMultiSubsystem>();
+    YMShowMultiSubsystem->FreeWebp();
 }

@@ -29,4 +29,12 @@ protected:
 		int InHeight,
 		float InQualityFactor = 100
 	);
+
+	static bool LoadDynamicWebpPictureByRGBA(
+		const char* InWebpSavePath,
+		std::vector<const unsigned char*>& OutRGBAData,
+		std::vector<int>& OutTimestamps_ms,
+		int& OutWidth,
+		int& OutHeight
+	);
 };
