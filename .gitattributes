@@ -36,8 +36,10 @@
 *.cs text eol=lf
 *.hlsl text eol=lf
 *.glsl text eol=lf
-*.bat text eol=crlf  # Windows批处理保留CRLF
-*.sh text eol=lf     # Shell脚本强制LF
+# Windows批处理保留CRLF
+*.bat text eol=crlf
+# Shell脚本强制LF
+*.sh text eol=lf
 *.md text eol=lf
 *.txt text eol=lf
 *.json text eol=lf
@@ -47,7 +49,8 @@
 
 # 3. UE特殊文件（避免冲突）
 *.uprojectdirs text eol=lf
-*.ini merge=union  # INI文件合并时保留双方内容
+# INI文件合并时保留双方内容
+*.ini merge=union
 *.Build.cs merge=union
 *.Target.cs merge=union
 
