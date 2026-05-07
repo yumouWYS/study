@@ -6,7 +6,7 @@
 
 ## 项目
 
-### Project_YM_WibP
+### Project_YM_WebP
 - **主题**：第三方库集成 — 将 libwebp 编译为 UE 插件
 - **核心内容**：静态/动态 WebP 生成、读取、视口截图、蓝图暴露
 - **架构**：`ThirdParty 原生库 → FYMSampleWebPLib → FYMSampleWebPCore → GameInstanceSubsystem → 蓝图`

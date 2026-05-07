@@ -4,7 +4,7 @@
 #include "GameFramework/HUD.h"
 #include "YMRPGHUD.generated.h"
 
-UCLASS()
+UCLASS(Blueprintable)
 class AYMRPGHUD : public AHUD
 {
 	GENERATED_BODY()

@@ -6,7 +6,7 @@
 #include "GameFramework/GameStateBase.h"
 #include "YMRPGGameState.generated.h"
 
-UCLASS()
+UCLASS(Blueprintable)
 class YMRPG_API AYMRPGGameState : public AGameStateBase
 {
 	GENERATED_BODY()

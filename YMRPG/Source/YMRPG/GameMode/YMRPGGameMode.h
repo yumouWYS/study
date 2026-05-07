@@ -9,7 +9,7 @@
 /**
  *  Simple GameMode for a third person game
  */
-UCLASS(abstract)
+UCLASS(Blueprintable)
 class AYMRPGGameMode : public AGameModeBase
 {
 	GENERATED_BODY()

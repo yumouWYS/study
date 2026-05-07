@@ -6,7 +6,7 @@
 
 ## 项目
 
-### Project_YM_WibP — 第三方库集成
+### Project_YM_WebP — 第三方库集成
 
 将 libwebp 编译为 UE 插件，学习从原生 C/C++ 库到 UE 蓝图暴露的完整封装链路。
 

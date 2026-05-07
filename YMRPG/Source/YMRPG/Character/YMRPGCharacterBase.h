@@ -2,6 +2,13 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Character.h"
+
+
+#include "AbilitySystemInterface.h"
+#include "GameplayCueInterface.h"
+#include "GameplayTagAssetInterface.h"
+
+
 #include "YMRPGCharacterBase.generated.h"
 
 
@@ -13,11 +20,50 @@
 * New Behavior should be added via pawn components when possible.
 */
 
+
+class UYMRPGAbilitySystemComponent;
+class AYMRPGPlayerController;
+class AYMRPGPlayerState;
+
 UCLASS(abstract)
-class YMRPG_API AYMRPGCharacterBase : public ACharacter
+class YMRPG_API AYMRPGCharacterBase : public ACharacter, public IAbilitySystemInterface, public IGameplayCueInterface, public IGameplayTagAssetInterface
 {
 	GENERATED_BODY()
 
 public:
 	AYMRPGCharacterBase(const FObjectInitializer& ObjectInitializer);
+
+	UFUNCTION(BlueprintCallable, Category = "YMRPG|Character")
+	AYMRPGPlayerController* GetPlayerController() const;
+
+
+	UFUNCTION(BlueprintCallable, Category = "YMRPG|Character")
+	AYMRPGPlayerState* GetPlayerState() const;
+
+
+	UFUNCTION(BlueprintCallable, Category = "YMRPG|Character")
+	FORCEINLINE UYMRPGAbilitySystemComponent* GetYMRPGAbilitySystemComponent() const { return AbilityComponent; }
+
+
+
+	virtual UAbilitySystemComponent* GetAbilitySystemComponent() const override;
+
+
+
+	virtual void GetOwnedGameplayTags(FGameplayTagContainer& TagContainer) const override;
+
+	UFUNCTION(BlueprintCallable, Category = GameplayTags)
+	virtual bool HasMatchingGameplayTag(FGameplayTag TagToCheck) const override;
+
+
+	UFUNCTION(BlueprintCallable, Category = GameplayTags)
+	virtual bool HasAllMatchingGameplayTags(const FGameplayTagContainer& TagContainer) const override;
+
+	
+	UFUNCTION(BlueprintCallable, Category = GameplayTags)
+	virtual bool HasAnyMatchingGameplayTags(const FGameplayTagContainer& TagContainer) const override;
+
+protected:
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "YMRPG|GAS", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UYMRPGAbilitySystemComponent> AbilityComponent;
 };

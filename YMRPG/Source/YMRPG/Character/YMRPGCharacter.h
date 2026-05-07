@@ -19,7 +19,7 @@ DECLARE_LOG_CATEGORY_EXTERN(LogTemplateCharacter, Log, All);
  *  A simple player-controllable third person character
  *  Implements a controllable orbiting camera
  */
-UCLASS(abstract)
+UCLASS(Blueprintable)
 class YMRPG_API AYMRPGCharacter : public AYMRPGCharacterBase
 {
 	GENERATED_BODY()
