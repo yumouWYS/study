@@ -23,8 +23,7 @@ AYMRPGPlayerController* AYMRPGCharacterBase::GetPlayerController() const
 
 AYMRPGPlayerState* AYMRPGCharacterBase::GetPlayerState() const
 {
-	return CastChecked<AYMRPGPlayerState>(GetPlayerState(), ECastCheckedType::NullAllowed);
-
+	return CastChecked<AYMRPGPlayerState>(APawn::GetPlayerState(), ECastCheckedType::NullAllowed);
 }
 
 UAbilitySystemComponent* AYMRPGCharacterBase::GetAbilitySystemComponent() const

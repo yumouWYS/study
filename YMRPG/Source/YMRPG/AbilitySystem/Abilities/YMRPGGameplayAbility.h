@@ -20,4 +20,16 @@ class YMRPG_API UYMRPGGameplayAbility : public UGameplayAbility
 
 public:
 	UYMRPGGameplayAbility(const FObjectInitializer& ObjectInitializer = FObjectInitializer::Get());
+
+	UFUNCTION(BlueprintCallable, Category = "YMRPG|Ability")
+	UYMRPGAbilitySystemComponent* GetYMRPGAbilitySystemComponentFromActorInfo() const;
+
+	UFUNCTION(BlueprintCallable, Category = "YMRPG|Ability")
+	AYMRPGCharacterBase* GetYMRPGCharacterBaseFromActorInfo() const;
+
+	UFUNCTION(BlueprintCallable, Category = "YMRPG|Ability")
+	AYMRPGPlayerController* GetYMRPGPlayerControllerFromActorInfo() const;
+
+	UFUNCTION(BlueprintCallable, Category = "YMRPG|Ability")
+	AController* GetControllerFromActorInfo() const;
 };
