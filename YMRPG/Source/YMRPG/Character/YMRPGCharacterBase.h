@@ -25,7 +25,7 @@ class UYMRPGAbilitySystemComponent;
 class AYMRPGPlayerController;
 class AYMRPGPlayerState;
 
-UCLASS(abstract)
+UCLASS(Abstract)
 class YMRPG_API AYMRPGCharacterBase : public ACharacter, public IAbilitySystemInterface, public IGameplayCueInterface, public IGameplayTagAssetInterface
 {
 	GENERATED_BODY()
