@@ -12,12 +12,9 @@
 - **架构**：`ThirdParty 原生库 → FYMSampleWebPLib → FYMSampleWebPCore → GameInstanceSubsystem → 蓝图`
 
 ### YMRPG
-- **主题**：多玩法 RPG 游戏系统
-- **三个变体**：
-  - `Variant_Combat` — 第三人称战斗（AI、连招、StateTree）
-  - `Variant_Platforming` — 平台跳跃（Dash 技能）
-  - `Variant_SideScrolling` — 横版过关（移动平台、跳板、拾取物）
-- **依赖模块**：EnhancedInput、AIModule、StateTree、GameplayStateTree、UMG
+- **主题**：GAS（Gameplay Ability System）学习与实战开发
+- **说明**：个人 Demo 项目，用于系统学习 GAS 框架并进行实战演练。`Variant_Combat` / `Variant_Platforming` / `Variant_SideScrolling` 是项目模板自带的示例变体，不作为学习重点。
+- **依赖模块**：EnhancedInput、AIModule、StateTree、GameplayStateTree、UMG、GameplayAbilities、GameplayTasks、GameplayTags、ModularGameplay
 
 ## 环境
 
@@ -25,6 +22,7 @@
 - **引擎**：UE 5.6
 - **IDE**：Visual Studio（通过 .sln 打开）
 - **版本控制**：Git + LFS（大文件由 .gitattributes 管理）
+- **学习日志**：`LEARNING_LOG.md` 记录每日有技术价值的提问与知识点，按日期归档
 
 ## 交流
 
