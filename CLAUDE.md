@@ -1,15 +1,10 @@
-# 学习仓库 — UE 5.6 学习项目集
+# YMRPG — UE 5.6 GAS 学习项目
 
 ## 概述
 
-这是一个个人 UE 5.6 学习仓库，包含两个跟着教程做的项目。所有项目共用同一个 git 仓库。
+个人 UE 5.6 学习仓库，基于 GAS（Gameplay Ability System）进行 RPG 游戏玩法系统开发与实战演练。
 
 ## 项目
-
-### Project_YM_WebP
-- **主题**：第三方库集成 — 将 libwebp 编译为 UE 插件
-- **核心内容**：静态/动态 WebP 生成、读取、视口截图、蓝图暴露
-- **架构**：`ThirdParty 原生库 → FYMSampleWebPLib → FYMSampleWebPCore → GameInstanceSubsystem → 蓝图`
 
 ### YMRPG
 - **主题**：GAS（Gameplay Ability System）学习与实战开发
@@ -33,4 +28,4 @@
 ## 用户
 
 - Git 用户名：yumouWYS
-- 学习路径：底层 C/C++ 集成 → UE C++ 封装 → 蓝图暴露 → 游戏玩法系统
+- 学习路径：游戏玩法系统（GAS → AI → UI → 网络同步）

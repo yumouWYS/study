@@ -4,13 +4,9 @@
 
 ## 目录
 
-### YMRPG
-
 - [2026-05-08](#ymrpg-2026-05-08) — UCLASS 说明符、UBT/UHT 构建系统、GA 生命周期与四项策略、FObjectInitializer、CurrentActorInfo 解耦、网络模型、GameplayTag 体系
 
 ---
-
-### YMRPG
 
 <details>
 <summary><b>2026-05-08</b></summary>
