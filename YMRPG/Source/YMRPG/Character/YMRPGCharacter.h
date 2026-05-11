@@ -71,6 +71,10 @@ protected:
 	/** Called for looking input */
 	void Look(const FInputActionValue& Value);
 
+	void ActiveJump();
+
+	void UnActiveJump();
+
 public:
 
 	/** Handles move inputs from either controls or UI interfaces */

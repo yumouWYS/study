@@ -45,4 +45,16 @@ protected:
 	/** Input mapping context setup */
 	virtual void SetupInputComponent() override;
 
+public:
+	UFUNCTION(BlueprintCallable, Category="YMRPG|PlayerController")
+	class UYMRPGAbilitySystemComponent* GetYMRPGAbilitySystemComponent() const;
+
+	UFUNCTION(BlueprintCallable, Category = "YMRPG|PlayerController")
+	class AYMRPGPlayerState* GetYMRPGPlayerState() const;
+
+	UFUNCTION(BlueprintCallable, Category = "YMRPG|PlayerController")
+	class AYMRPGHUD* GetYMRPGHUD() const;
+
+	virtual void PostProcessInput(const float DeltaTime, const bool bGamePaused) override;
+
 };

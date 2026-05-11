@@ -7,6 +7,7 @@
 #include "AbilitySystemInterface.h"
 #include "GameplayCueInterface.h"
 #include "GameplayTagAssetInterface.h"
+#include "GameplayAbilitySpec.h"
 
 
 #include "YMRPGCharacterBase.generated.h"
@@ -24,6 +25,7 @@
 class UYMRPGAbilitySystemComponent;
 class AYMRPGPlayerController;
 class AYMRPGPlayerState;
+class UYMRPGGameplayAbility;
 
 UCLASS(Abstract)
 class YMRPG_API AYMRPGCharacterBase : public ACharacter, public IAbilitySystemInterface, public IGameplayCueInterface, public IGameplayTagAssetInterface
@@ -36,32 +38,30 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "YMRPG|Character")
 	AYMRPGPlayerController* GetPlayerController() const;
 
-
 	UFUNCTION(BlueprintCallable, Category = "YMRPG|Character")
 	AYMRPGPlayerState* GetPlayerState() const;
-
 
 	UFUNCTION(BlueprintCallable, Category = "YMRPG|Character")
 	FORCEINLINE UYMRPGAbilitySystemComponent* GetYMRPGAbilitySystemComponent() const { return AbilityComponent; }
 
 
-
 	virtual UAbilitySystemComponent* GetAbilitySystemComponent() const override;
 
 
-
 	virtual void GetOwnedGameplayTags(FGameplayTagContainer& TagContainer) const override;
-
-	UFUNCTION(BlueprintCallable, Category = GameplayTags)
 	virtual bool HasMatchingGameplayTag(FGameplayTag TagToCheck) const override;
-
-
-	UFUNCTION(BlueprintCallable, Category = GameplayTags)
 	virtual bool HasAllMatchingGameplayTags(const FGameplayTagContainer& TagContainer) const override;
-
-	
-	UFUNCTION(BlueprintCallable, Category = GameplayTags)
 	virtual bool HasAnyMatchingGameplayTags(const FGameplayTagContainer& TagContainer) const override;
+
+protected:
+	virtual void BeginPlay() override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+
+protected:
+	UPROPERTY(BlueprintReadWrite, EditDefaultsOnly, Category="YMRPG|Ability", meta=(AllowPrivateAccess="true"))
+	TMap<FGameplayTag, TSubclassOf<UYMRPGGameplayAbility>> AbilitiesToAdd;
+
+	TMap<FGameplayTag, FGameplayAbilitySpecHandle> AbilitiesToActive;
 
 protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "YMRPG|GAS", meta = (AllowPrivateAccess = "true"))

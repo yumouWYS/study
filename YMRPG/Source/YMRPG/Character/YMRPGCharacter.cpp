@@ -11,6 +11,10 @@
 #include "EnhancedInputSubsystems.h"
 #include "InputActionValue.h"
 #include "YMRPG.h"
+
+#include "YMRPGGameplayTag.h"
+
+#include "YMRPGAbilitySystemComponent.h"
 //AYMRPGCharacterBase(const FObjectInitializer& ObjectInitializer);
 
 AYMRPGCharacter::AYMRPGCharacter(const FObjectInitializer& ObjectInitializer):Super(ObjectInitializer)
@@ -57,8 +61,8 @@ void AYMRPGCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComp
 	if (UEnhancedInputComponent* EnhancedInputComponent = Cast<UEnhancedInputComponent>(PlayerInputComponent)) {
 		
 		// Jumping
-		EnhancedInputComponent->BindAction(JumpAction, ETriggerEvent::Started, this, &ACharacter::Jump);
-		EnhancedInputComponent->BindAction(JumpAction, ETriggerEvent::Completed, this, &ACharacter::StopJumping);
+		EnhancedInputComponent->BindAction(JumpAction, ETriggerEvent::Started, this, &AYMRPGCharacter::ActiveJump);
+		EnhancedInputComponent->BindAction(JumpAction, ETriggerEvent::Completed, this, &AYMRPGCharacter::UnActiveJump);
 
 		// Moving
 		EnhancedInputComponent->BindAction(MoveAction, ETriggerEvent::Triggered, this, &AYMRPGCharacter::Move);
@@ -89,6 +93,20 @@ void AYMRPGCharacter::Look(const FInputActionValue& Value)
 
 	// route the input
 	DoLook(LookAxisVector.X, LookAxisVector.Y);
+}
+
+void AYMRPGCharacter::ActiveJump()
+{
+	FGameplayTag InPutTag = YMRPGGameplayTags::FindTagByString(TEXT("InputTag.Jump"), true);
+
+	GetYMRPGAbilitySystemComponent()->AbilityInputTagPressed(InPutTag);
+}
+
+void AYMRPGCharacter::UnActiveJump()
+{
+	FGameplayTag InPutTag = YMRPGGameplayTags::FindTagByString(TEXT("InputTag.Jump"), true);
+
+	GetYMRPGAbilitySystemComponent()->AbilityInputTagReleased(InPutTag);
 }
 
 void AYMRPGCharacter::DoMove(float Right, float Forward)

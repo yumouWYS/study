@@ -2,6 +2,7 @@
 #include "YMRPGAbilitySystemComponent.h"
 #include "YMRPGPlayerController.h"
 #include "YMRPGPlayerState.h"
+#include "YMRPGGameplayAbility.h"
 
 AYMRPGCharacterBase::AYMRPGCharacterBase(const FObjectInitializer& ObjectInitializer):Super(ObjectInitializer)
 {
@@ -65,4 +66,34 @@ bool AYMRPGCharacterBase::HasAnyMatchingGameplayTags(const FGameplayTagContainer
         return YMRPGASC->HasAnyMatchingGameplayTags(TagContainer);
 	}
 	return false;
+}
+
+void AYMRPGCharacterBase::BeginPlay()
+{
+	Super::BeginPlay();
+
+	if (AbilityComponent && GetLocalRole() == ROLE_Authority)
+	{
+		AbilityComponent->InitAbilityActorInfo(this, this);
+
+		for (auto& TmpAbilityPair : AbilitiesToAdd)
+		{
+			UYMRPGGameplayAbility* AbilityCDO = TmpAbilityPair.Value->GetDefaultObject<UYMRPGGameplayAbility>();
+
+			FGameplayAbilitySpec AbilitySpec(AbilityCDO, 1);
+
+			AbilitySpec.SourceObject = this;
+			AbilitySpec.DynamicAbilityTags.AddTag(TmpAbilityPair.Key);
+
+			const FGameplayAbilitySpecHandle AbilityHandle = AbilityComponent->GiveAbility(AbilitySpec);
+
+			AbilitiesToActive.Add(TmpAbilityPair.Key, AbilityHandle);
+		}
+	}
+}
+
+void AYMRPGCharacterBase::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+
+	Super::EndPlay(EndPlayReason);
 }

@@ -9,6 +9,14 @@
 #include "YMRPG.h"
 #include "Widgets/Input/SVirtualJoystick.h"
 
+
+#include "YMRPGAbilitySystemComponent.h"
+#include "YMRPGPlayerState.h"
+#include "YMRPGHUD.h"
+#include "YMRPGCharacterBase.h"
+
+
+
 AYMRPGPlayerController::AYMRPGPlayerController(const FObjectInitializer& ObjectInitializer):Super(ObjectInitializer)
 {
 
@@ -63,4 +71,34 @@ void AYMRPGPlayerController::SetupInputComponent()
 			}
 		}
 	}
+}
+
+UYMRPGAbilitySystemComponent* AYMRPGPlayerController::GetYMRPGAbilitySystemComponent() const
+{
+	AYMRPGCharacterBase* YMRPGCharacter = Cast<AYMRPGCharacterBase>(GetPawn());	
+	if (YMRPGCharacter)
+	{
+		return YMRPGCharacter->GetYMRPGAbilitySystemComponent();
+	}
+	return nullptr;
+}
+
+AYMRPGPlayerState* AYMRPGPlayerController::GetYMRPGPlayerState() const
+{
+	return CastChecked<AYMRPGPlayerState>(PlayerState, ECastCheckedType::NullAllowed);
+}
+
+AYMRPGHUD* AYMRPGPlayerController::GetYMRPGHUD() const
+{
+	return CastChecked<AYMRPGHUD>(GetHUD(), ECastCheckedType::NullAllowed);
+}
+
+void AYMRPGPlayerController::PostProcessInput(const float DeltaTime, const bool bGamePaused)
+{
+	if (UYMRPGAbilitySystemComponent* YMRPGASC = GetYMRPGAbilitySystemComponent())
+	{
+        YMRPGASC->ProcessAbilityInput(DeltaTime, bGamePaused);
+	}
+
+	Super::PostProcessInput(DeltaTime, bGamePaused);
 }

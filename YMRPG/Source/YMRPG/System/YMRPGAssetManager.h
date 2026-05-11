@@ -12,4 +12,6 @@ class UYMRPGAssetManager : public UAssetManager
 public:
     	/** Asset Subsystem */
 	UYMRPGAssetManager();
+
+	virtual void StartInitialLoading() override;
 };
