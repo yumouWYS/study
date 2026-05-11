@@ -70,6 +70,8 @@ void AYMRPGCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComp
 
 		// Looking
 		EnhancedInputComponent->BindAction(LookAction, ETriggerEvent::Triggered, this, &AYMRPGCharacter::Look);
+
+		EnhancedInputComponent->BindAction(MeleeAction, ETriggerEvent::Started, this, &AYMRPGCharacter::ActiveMelee);
 	}
 	else
 	{
@@ -107,6 +109,13 @@ void AYMRPGCharacter::UnActiveJump()
 	FGameplayTag InPutTag = YMRPGGameplayTags::FindTagByString(TEXT("InputTag.Jump"), true);
 
 	GetYMRPGAbilitySystemComponent()->AbilityInputTagReleased(InPutTag);
+}
+
+void AYMRPGCharacter::ActiveMelee()
+{
+	FGameplayTag InPutTag = YMRPGGameplayTags::FindTagByString(TEXT("InputTag.Melee"), true);
+
+	GetYMRPGAbilitySystemComponent()->AbilityInputTagPressed(InPutTag);
 }
 
 void AYMRPGCharacter::DoMove(float Right, float Forward)

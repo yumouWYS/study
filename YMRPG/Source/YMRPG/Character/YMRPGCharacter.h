@@ -57,6 +57,8 @@ protected:
 	UPROPERTY(EditAnywhere, Category="Input")
 	UInputAction* MouseLookAction;
 
+	UPROPERTY(EditAnywhere, Category = "Input")
+	UInputAction* MeleeAction;
 
 protected:
 
@@ -74,6 +76,8 @@ protected:
 	void ActiveJump();
 
 	void UnActiveJump();
+
+	void ActiveMelee();
 
 public:
 
