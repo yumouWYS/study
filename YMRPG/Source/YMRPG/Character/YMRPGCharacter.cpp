@@ -15,6 +15,7 @@
 #include "YMRPGGameplayTag.h"
 
 #include "YMRPGAbilitySystemComponent.h"
+#include "YMRPGComboComponent.h"
 //AYMRPGCharacterBase(const FObjectInitializer& ObjectInitializer);
 
 AYMRPGCharacter::AYMRPGCharacter(const FObjectInitializer& ObjectInitializer):Super(ObjectInitializer)
@@ -113,9 +114,21 @@ void AYMRPGCharacter::UnActiveJump()
 
 void AYMRPGCharacter::ActiveMelee()
 {
+	GetYMRPGComboComponent()->SetPressed();
+
 	FGameplayTag InPutTag = YMRPGGameplayTags::FindTagByString(TEXT("InputTag.Melee"), true);
 
 	GetYMRPGAbilitySystemComponent()->AbilityInputTagPressed(InPutTag);
+}
+
+void AYMRPGCharacter::ComboMelee()
+{
+	if(GetLocalRole() == ENetRole::ROLE_AutonomousProxy)
+	{
+		GetAbilitySystemComponent()->StopMontageIfCurrent(*GetYMRPGComboComponent()->GetLastComboAnimMontage());
+
+		ActiveMelee();
+	}
 }
 
 void AYMRPGCharacter::DoMove(float Right, float Forward)

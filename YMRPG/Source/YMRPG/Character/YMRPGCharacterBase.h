@@ -21,7 +21,7 @@
 * New Behavior should be added via pawn components when possible.
 */
 
-
+class UYMRPGComboComponent;
 class UYMRPGAbilitySystemComponent;
 class AYMRPGPlayerController;
 class AYMRPGPlayerState;
@@ -45,6 +45,9 @@ public:
 	FORCEINLINE UYMRPGAbilitySystemComponent* GetYMRPGAbilitySystemComponent() const { return AbilityComponent; }
 
 
+	UFUNCTION(BlueprintCallable, Category = "YMRPG|Character")
+	FORCEINLINE UYMRPGComboComponent* GetYMRPGComboComponent() const { return ComboComponent; }
+
 	virtual UAbilitySystemComponent* GetAbilitySystemComponent() const override;
 
 
@@ -66,4 +69,7 @@ protected:
 protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "YMRPG|GAS", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UYMRPGAbilitySystemComponent> AbilityComponent;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "YMRPG|Character", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UYMRPGComboComponent> ComboComponent;
 };

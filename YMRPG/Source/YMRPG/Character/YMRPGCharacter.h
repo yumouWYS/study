@@ -79,6 +79,10 @@ protected:
 
 	void ActiveMelee();
 
+
+public:
+	void ComboMelee();
+
 public:
 
 	/** Handles move inputs from either controls or UI interfaces */

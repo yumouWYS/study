@@ -5,7 +5,7 @@
 
 UYMRPGGameplayAbility::UYMRPGGameplayAbility(const FObjectInitializer& ObjectInitializer): Super(ObjectInitializer)
 {
-	ReplicationPolicy = EGameplayAbilityReplicationPolicy::ReplicateYes;
+	ReplicationPolicy = EGameplayAbilityReplicationPolicy::ReplicateNo;
 
 	InstancingPolicy = EGameplayAbilityInstancingPolicy::InstancedPerActor;
 

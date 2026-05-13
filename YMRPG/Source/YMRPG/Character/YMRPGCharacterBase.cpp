@@ -3,6 +3,7 @@
 #include "YMRPGPlayerController.h"
 #include "YMRPGPlayerState.h"
 #include "YMRPGGameplayAbility.h"
+#include "YMRPGComboComponent.h"
 
 AYMRPGCharacterBase::AYMRPGCharacterBase(const FObjectInitializer& ObjectInitializer):Super(ObjectInitializer)
 {
@@ -12,6 +13,10 @@ AYMRPGCharacterBase::AYMRPGCharacterBase(const FObjectInitializer& ObjectInitial
 	AbilityComponent = CreateDefaultSubobject<UYMRPGAbilitySystemComponent>(TEXT("AbilitySystemComponent"));
 	AbilityComponent->SetIsReplicated(true);
 	AbilityComponent->SetReplicationMode(EGameplayEffectReplicationMode::Mixed);
+
+
+	ComboComponent = CreateDefaultSubobject<UYMRPGComboComponent>(TEXT("ComboComponent"));
+	ComboComponent->SetIsReplicated(false);
 
 
 	NetUpdateFrequency = 100.f;
