@@ -7,6 +7,7 @@
 - [2026-05-08](#ymrpg-2026-05-08) — UCLASS 说明符、UBT/UHT 构建系统、GA 生命周期与四项策略、FObjectInitializer、CurrentActorInfo 解耦、网络模型、GameplayTag 体系
 - [2026-05-10](#ymrpg-2026-05-10) — 输入系统架构（三个 Handle 数组）、AbilitiesToAdd/Active 配置层、FGameplayAbilitySpec 全字段、CDO 陷阱、ProcessAbilityInput 调用链、DynamicAbilityTags 传递链、数据驱动 vs 继承、 WaitInputRelease 排查、UE 5.4→5.5 PredictionKey 迁移根因
 - [2026-05-13](#ymrpg-2026-05-13) — ComboComponent 连招组件、AnimNotify vs AnimNotifyState、const 成员函数返回指针、ASC StopMontageIfCurrent 与 Montage 双通路、ProcessAbilityInput 三阶段、ENetMode 网络模式、bOrientRotationToMovement
+- [2026-05-16](#ymrpg-2026-05-16) — Attribute 角色与功能、ATTRIBUTE_ACCESSORS 宏展开、FGameplayEffectSpec 运行时实例、CDO vs UClass、UAttributeSet 五个钩子函数、GetLifetimeReplicatedProps、REPNOTIFY_Always vs OnChanged、__super vs Super
 
 ---
 
@@ -549,5 +550,104 @@ void StopMontageIfCurrent(const UAnimMontage& Montage, float OverrideBlendOutTim
 `UCharacterMovementComponent` 属性。设为 `true` 时，角色**自动朝加速度方向旋转**，转速由 `RotationRate` 控制。每帧 `PhysicsRotation()` → `ComputeOrientToMovementRotation()` 执行。
 
 必须与 `bUseControllerRotationYaw` 互斥——后者是面朝摄像机方向，前者是面朝移动方向。动作游戏通常关前者、开后者。
+
+</details>
+
+---
+
+<details>
+<summary><b>2026-05-16</b></summary>
+
+### Attribute 在 GAS 中的角色与功能
+
+Attribute 是 GAS 中的游戏数值载体，承担三层角色：
+
+- **数据载体**：所有参与游戏逻辑的浮点数（血量、攻击力、移速）由 `FGameplayAttributeData` 封装，通过 `ATTRIBUTE_ACCESSORS` 宏自动生成 Get/Set/Init 函数。引擎内部用 `FGameplayAttribute`（类似反射指针）引用任意属性，使 GE、GA、UI 无需依赖具体类名。
+- **GE 的操作目标**：实现"数值变化"与"谁触发了变化"的解耦——GA 负责何时改，GE 负责怎么改，Attribute 是被操作的数据。GE 通过 Modifier 指向目标 Attribute，伤害计算、护甲减免可独立配置和组合。
+- **网络同步单元**：ASC 内置对 Attribute 的复制，Attribute 变化时自动通过 `RepNotify` 推送到客户端，无需手写 RPC。
+
+`FGameplayAttributeData` 内部 Base/Current 双值机制：Base 存永久修改（升级加点、装备），Current 存临时修改（Buff、扣血）。GE 过期时只清除 Current 贡献，Base 不受影响，因此 Buff 结束属性自动还原。
+
+### ATTRIBUTE_ACCESSORS 宏展开
+
+`ATTRIBUTE_ACCESSORS(ClassName, PropertyName)` 含四个子宏：
+
+| 子宏 | 生成函数 | 用途 |
+|------|---------|------|
+| `PROPERTY_GETTER` | `static FGameplayAttribute GetXxxAttribute()` | 返回 `FGameplayAttribute`（属性指针），GE 里指定目标属性 |
+| `VALUE_GETTER` | `FORCEINLINE float GetXxx() const` | 返回 `CurrentValue`，UI 显示、条件判断 |
+| `VALUE_SETTER` | `FORCEINLINE void SetXxx(float)` | 通过 ASC `SetNumericAttributeBase` 修改，走完整 GAS 流程 |
+| `VALUE_INITTER` | `FORCEINLINE void InitXxx(float)` | 同时设 Base 和 Current，直接写、不触发回调、不走 ASC |
+
+**Setter 走 ASC 通道**意味着修改会触发 `PreAttributeChange` → 修改 → `PostGameplayEffectExecute`，且自动同步到客户端。直接赋值 `Health = x` 会绕过 GAS 体系，导致回调缺失、网络不同步。**Init 只在创建时调用一次**，避免初始化阶段触发死亡检测等不应运行的逻辑。
+
+### DECLARE_MULTICAST_DELEGATE_SixParams 与 FGameplayEffectSpec
+
+**委托声明**定义多点广播事件类型 `FYMRPGAttributeEvent`，六个参数：
+
+| 参数 | 含义 |
+|------|------|
+| `EffectInstigator` | 效果的触发者（谁按下了攻击键） |
+| `EffectCauser` | 效果的物理来源（那颗火球是哪个 Actor） |
+| `EffectSpec` | GE 运行时实例指针 |
+| `EffectMagnitude` | 此次修改的数值幅度 |
+| `OldValue` / `NewValue` | 属性变化前后的值 |
+
+**FGameplayEffectSpec** 是 `UGameplayEffect` 资产的运行时实例。GE 资产不可变（immutable），但需要在运行时决定倍率、等级、攻击者等信息——这些动态数据存在 Spec 里。
+
+核心成员：`Def`（指向 GE CDO 的只读指针）、`Modifiers`（已计算好幅度的修改器）、`EffectContext`（谁发起，在哪发生）、`Duration`/`Period`、`CapturedSourceTags`/`CapturedTargetTags`、`SetByCallerTagMagnitudes`。
+
+**类比**：`UGameplayEffect`（CDO）= 模具，`FGameplayEffectSpec` = 用模具浇铸出的具体产品，`Def` = 产品内部指向模具的指针。
+
+### CDO vs UClass
+
+| | CDO | UClass |
+|----|-----|--------|
+| 本质 | 一个默认实例 | 一个类型描述符 |
+| 保存 | 属性默认值 | 类的结构信息（有哪些 UProperty、UFUNCTION） |
+| 获取方式 | `GetDefault<T>()`、`GetMutableDefault<T>()` | `GetClass()`、`StaticClass()` |
+| 可修改 | `GetMutableDefault` 可以改 | 不能，元数据编译期固定 |
+
+**GAS 例子**：`PROPERTY_GETTER` 用 `StaticClass()` 拿 UClass 查结构（找属性的偏移位置），Spec 的 `Def` 指向 CDO 读规则数据（冷却多久、修改哪个属性）。
+
+### UAttributeSet 五个钩子函数
+
+| 钩子 | 调用时机 | 用途 |
+|------|----------|------|
+| `PreAttributeChange` | **任何**修改发生之前 | 钳制值 `Clamp(Health, 0, MaxHealth)` |
+| `PostAttributeChange` | 任何修改发生后 | UI 刷新血条，不知道谁改的 |
+| `PreGameplayEffectExecute` | GE 执行修改 Base 前 | 免疫判断、返回 false 阻止生效 |
+| `PostGameplayEffectExecute` | GE 执行修改 Base 后 | 伤害响应、死亡判定、广播事件 |
+| `PreAttributeBaseChange` | Base 值被修改前（有 Aggregator 时） | 钳制 Base 值 |
+
+关键区分：`PostAttributeChange` 不提供 EffectSpec（不知道谁打的），适合 UI 刷新；`PostGameplayEffectExecute` 有完整 GE 信息，适合死亡判定和击杀奖励。
+
+### GetLifetimeReplicatedProps
+
+定义在 `UObject`（不是 `UAttributeSet`），`UAttributeSet` 通过继承链拿到它。这是 UE 网络属性复制注册函数——引擎网络初始化阶段调用，你往 `OutLifetimeProps` 里填条目，每条声明一个属性的复制规则：
+
+```cpp
+DOREPLIFETIME(ClassName, PropertyName, Condition, RepNotifyCondition);
+//  ↑ 所属类       ↑ 属性      ↑ 复制给谁     ↑ 怎么触发 OnRep
+```
+
+`COND_None`（无条件复制）用于 AttributeSet 是正确的——属性值需要所有客户端可见。此声明必须与 `UPROPERTY(ReplicatedUsing = OnRep_Xxx)` 配对，缺一不可。
+
+### REPNOTIFY_Always vs REPNOTIFY_OnChanged
+
+定义在 `CoreNetTypes.h`：
+
+```cpp
+REPNOTIFY_OnChanged = 0,  // 只有收到的值 ≠ 本地当前值时，才调 OnRep
+REPNOTIFY_Always = 1,     // 只要收到服务器同步，无条件调 OnRep
+```
+
+**GAS 必须用 Always 的原因**：客户端预测 GE 执行后，本地值已被修改。服务器确认时如果数值恰好相同（预测正确），`OnChanged` 会跳过 OnRep 调用。但 `GAMEPLAYATTRIBUTE_REPNOTIFY` 宏内部不只是设值，还负责清理预测标记——跳过 OnRep 意味着预测状态残留。
+
+`OnChanged` 是性能优化，`Always` 是预测系统的正确性保证。
+
+### `__super` vs `Super`
+
+`__super` 是 MSVC 编译器专有关键字，表示直接父类名称。不可移植。UE 的 UHT 在 `.generated.h` 中生成 `typedef ParentClass Super;`，因此 UE 项目统一使用 `Super::`。在 UE 代码中绝不使用 `__super`。
 
 </details>
