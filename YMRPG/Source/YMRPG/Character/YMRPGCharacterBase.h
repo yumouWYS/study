@@ -26,6 +26,7 @@ class UYMRPGAbilitySystemComponent;
 class AYMRPGPlayerController;
 class AYMRPGPlayerState;
 class UYMRPGGameplayAbility;
+class UYMRPGCharacterAttributeSet;
 
 UCLASS(Abstract)
 class YMRPG_API AYMRPGCharacterBase : public ACharacter, public IAbilitySystemInterface, public IGameplayCueInterface, public IGameplayTagAssetInterface
@@ -72,4 +73,7 @@ protected:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "YMRPG|Character", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UYMRPGComboComponent> ComboComponent;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "YMRPG|GAS", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UYMRPGCharacterAttributeSet> CharacterSet;
 };

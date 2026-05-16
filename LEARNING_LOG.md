@@ -7,7 +7,8 @@
 - [2026-05-08](#ymrpg-2026-05-08) — UCLASS 说明符、UBT/UHT 构建系统、GA 生命周期与四项策略、FObjectInitializer、CurrentActorInfo 解耦、网络模型、GameplayTag 体系
 - [2026-05-10](#ymrpg-2026-05-10) — 输入系统架构（三个 Handle 数组）、AbilitiesToAdd/Active 配置层、FGameplayAbilitySpec 全字段、CDO 陷阱、ProcessAbilityInput 调用链、DynamicAbilityTags 传递链、数据驱动 vs 继承、 WaitInputRelease 排查、UE 5.4→5.5 PredictionKey 迁移根因
 - [2026-05-13](#ymrpg-2026-05-13) — ComboComponent 连招组件、AnimNotify vs AnimNotifyState、const 成员函数返回指针、ASC StopMontageIfCurrent 与 Montage 双通路、ProcessAbilityInput 三阶段、ENetMode 网络模式、bOrientRotationToMovement
-- [2026-05-16](#ymrpg-2026-05-16) — Attribute 角色与功能、ATTRIBUTE_ACCESSORS 宏展开、FGameplayEffectSpec 运行时实例、CDO vs UClass、UAttributeSet 五个钩子函数、GetLifetimeReplicatedProps、REPNOTIFY_Always vs OnChanged、__super vs Super
+- [2026-05-15](#ymrpg-2026-05-15) — Attribute 角色与功能、ATTRIBUTE_ACCESSORS 宏展开、FGameplayEffectSpec 运行时实例、CDO vs UClass、UAttributeSet 五个钩子函数、GetLifetimeReplicatedProps、REPNOTIFY_Always vs OnChanged、__super vs Super
+- [2026-05-16](#ymrpg-2026-05-16) — AttributeSet 编译错误排查、`override` 误用、`Lifetime` 大小写、Attribute 体系完整架构、DamageExecution 伤害计算管线、GA_Melee 蓝图节点图分析
 
 ---
 
@@ -556,7 +557,7 @@ void StopMontageIfCurrent(const UAnimMontage& Montage, float OverrideBlendOutTim
 ---
 
 <details>
-<summary><b>2026-05-16</b></summary>
+<summary><b>2026-05-15</b></summary>
 
 ### Attribute 在 GAS 中的角色与功能
 
@@ -649,5 +650,274 @@ REPNOTIFY_Always = 1,     // 只要收到服务器同步，无条件调 OnRep
 ### `__super` vs `Super`
 
 `__super` 是 MSVC 编译器专有关键字，表示直接父类名称。不可移植。UE 的 UHT 在 `.generated.h` 中生成 `typedef ParentClass Super;`，因此 UE 项目统一使用 `Super::`。在 UE 代码中绝不使用 `__super`。
+
+</details>
+
+---
+
+<details>
+<summary><b>2026-05-16</b></summary>
+
+### Attribute 体系完整架构分析
+
+#### 四层模型
+
+```
+┌──────────────────────────┐
+│ UYMRPGGameplayAbility    │  ← 技能层：定义四项策略、提供 ASC/Character 访问器
+├──────────────────────────┤
+│ AYMRPGCharacterBase      │  ← 宿主层：持有 ASC、CharacterSet、ComboComponent
+│ 构造函数: CDO            │     BeginPlay: 授予技能
+├──────────────────────────┤
+│ UYMRPGCharacterAttributeSet │ ← 属性数据层：12个属性、5个委托、5个钩子
+├──────────────────────────┤
+│ UYMRPGAbilitySystemComponent│ ← 能力管理+输入路由层
+└──────────────────────────┘
+```
+
+#### 各资源实例化时机与位置
+
+| 资源 | 何时实例化 | 位置 | 方式 |
+|------|-----------|------|------|
+| ASC | Character CDO 构造 | `CreateDefaultSubobject` | 每个 Character 一个，Mixed 复制模式 |
+| CharacterSet | Character CDO 构造 | `CreateDefaultSubobject` | 每个 Character 一个，12 属性全复制 |
+| ComboComponent | Character CDO 构造 | `CreateDefaultSubobject` | 本地组件，不复制 |
+| GA CDO | 引擎启动/类注册 | UHT/UBT | `GetDefaultObject<T>()` 读取，全局唯一 |
+| GA 实例 | 首次激活时 | `InstancedPerActor` 策略 | ASC 内部管理，每个 Actor 一个持久实例 |
+| `FGameplayAbilitySpec` | BeginPlay 循环中 | 栈上构造后传 GiveAbility | ASC 内部接管生命周期 |
+| `FGameplayAbilitySpecHandle` | GiveAbility 返回 | 存于 AbilitiesToActive | 句柄，用于 TryActivateAbility |
+| `FGameplayEffectSpec` | GE 被应用时 | ASC 内部创建 | 运行时临时对象，含 Context+Modifiers |
+
+#### 服务器端：GE 修改 Health 的完整调用链
+
+```
+GE 被 ASC 应用
+  ├─1. PreGameplayEffectExecute(Data)
+  │     HealthBeforeAttributeChange  = GetHealth()     // 快照
+  │     MaxHealthBeforeAttributeChange = GetMaxHealth()
+  │     return true
+  ├─2. GE 内部 Modifier 执行（修改 Health 值）
+  ├─3. PreAttributeChange(Attribute, NewValue)          // 扩展点：值生效前修改
+  ├─4. PreAttributeBaseChange(Attribute, NewValue)
+  ├─5. 值写入 FGameplayAttributeData::CurrentValue
+  ├─6. PostAttributeChange(Attribute, OldValue, NewValue)
+  │     if MaxHealth 变了 && Health > 新MaxHealth:
+  │       ASC->ApplyModToAttribute(Health, Override, 新MaxHealth)
+  │     if bOutOfHealth && Health > 0: bOutOfHealth = false
+  └─7. PostGameplayEffectExecute(Data)
+        switch (被修改的属性):
+          case Damage:
+            Health = Clamp(Health - Damage, 0, MaxHealth)
+            Damage = 0   // 元属性已消费
+          case Health:   Clamp
+          case MaxHealth: OnMaxHealthChanged.Broadcast(...)
+          case Mana:     Clamp
+          case MaxMana:  OnMaxManaChanged.Broadcast(...)
+        统一尾部:
+          if Health 变化: OnHealthChanged.Broadcast(...)
+          if Health <= 0 && !bOutOfHealth: OnOutOfHealth.Broadcast(...)
+          bOutOfHealth = (Health <= 0)
+```
+
+**关键设计点**：
+- `Damage` 是元属性（`HideFromModifiers`），不直接被 GE 修改。由 GA/Execution 通过 `SetDamage()` 写入，PostGameplayEffectExecute 看到 Damage > 0 就扣到 Health 上，然后立刻清零——Damage 是"暂存中转站"
+- `OnHealthChanged` 和 `OnOutOfHealth` 的广播在所有 case 处理完后统一执行，保证不因 case 顺序漏广播
+- `HealthBeforeAttributeChange` 在 PreGameplayEffectExecute 中快照，确保后续多次修改 Health，旧值仍为 GE 执行前的那个值
+
+#### 客户端端：属性复制的完整路径
+
+```
+服务器 Health 变化 → 网络复制 → 客户端收到
+  └─ OnRep_Health(OldValue)
+       ├─ GAMEPLAYATTRIBUTE_REPNOTIFY(...)  → 通知 ASC 缓存更新
+       ├─ EstimatedMagnitude = CurrentHealth - OldValue.GetCurrentValue()
+       ├─ OnHealthChanged.Broadcast(nullptr, nullptr, nullptr, Magnitude, Old, Current)
+       ├─ if !bOutOfHealth && CurrentHealth <= 0:
+       │     OnOutOfHealth.Broadcast(...)   // 首次死亡，无施法者
+       └─ bOutOfHealth = (CurrentHealth <= 0)
+```
+
+**服务器 PostGameplayEffectExecute vs 客户端 OnRep 关键区别**：
+
+| | 服务器 | 客户端 |
+|---|---|---|
+| 施法者信息 | EffectInstigator/Causer 有效 | 全部 nullptr |
+| 触发时机 | GE 执行完成后 | 属性复制到达时 |
+| 信息来源 | `FGameplayEffectModCallbackData` | `OldValue`（上次复制值） |
+
+#### 输入 → 技能激活的完整路径
+
+```
+玩家按键
+  → ASC->AbilityInputTagPressed(InputTag)
+       遍历 ActivatableAbilities.Items，匹配 DynamicAbilityTags
+       → InputPressedSpecHandles / InputHeldSpecHandles
+  松开:
+  → ASC->AbilityInputTagReleased(InputTag)
+       → InputReleasedSpecHandles / 从 InputHeldSpecHandles 移除
+  下一帧:
+  → ASC->ProcessAbilityInput(DeltaTime)
+       阶段一: PressedHandle → 未激活 → AbilitiesToActivate
+                             → 已激活 → AbilitySpecInputPressed (RPC)
+       阶段二: TryActivateAbility(Handle) → GAS 标准激活流程
+       阶段三: ReleasedHandle → AbilitySpecInputReleased (RPC)
+       阶段四: 三个数组清空
+
+AbilitySpecInputPressed/Released 内部:
+  InvokeReplicatedEvent(EventType, SpecHandle, PredictionKey)
+    → 带 PredictionKey 的 RPC，保证客户端-服务器事件对应
+```
+
+#### 数据传递链
+
+**GE 执行时的数据流**：
+```
+GE Spec(FGameplayEffectSpec)
+  ├─ Context(FGameplayEffectContextHandle)
+  │   ├─ GetInstigator() → 谁按下了攻击键
+  │   ├─ GetEffectCauser() → 物理来源（火球/拳头/陷阱）
+  │   └─ GetOriginalInstigator() → 连锁GE的最初来源
+  ├─ Modifiers[] → 引擎执行 → EvaluatedData
+  │   └─ Data.EvaluatedData.Attribute → 被修改的属性
+  │   └─ Data.EvaluatedData.Magnitude → 修改量
+  └─ 广播: FYMRPGAttributeEvent(Instigator, Causer, Spec*, Magnitude, Old, New)
+```
+
+**Ability 授予时的数据流**：
+```
+AbilitiesToAdd (TMap<FGameplayTag, TSubclassOf<UYMRPGGameplayAbility>>)
+  Key: GameplayTag → 输入绑定用 + 写入 Spec.DynamicAbilityTags
+  Value: TSubclassOf<>
+    → GetDefaultObject<T>() 读 CDO（不创建实例）
+    → FGameplayAbilitySpec(CDO, Level=1)
+       Spec.SourceObject = this
+       Spec.DynamicAbilityTags.AddTag(Tag)
+    → GiveAbility(Spec) → FGameplayAbilitySpecHandle
+```
+
+### OnRep_Health 函数详解
+
+```cpp
+void OnRep_Health(const FGameplayAbilityData& OldValue)
+{
+    GAMEPLAYATTRIBUTE_REPNOTIFY(UYMRPGCharacterAttributeSet, Health, OldValue);
+    // ↑ 通知 ASC 属性已复制，触发 OnGameplayAttributeValueChange 回调
+
+    const float EstimatedMagnitude = CurrentHealth - OldValue.GetCurrentValue();
+    // ↑ 估算变化量。叫 Estimated 是因为客户端可能被预测修改过
+
+    OnHealthChanged.Broadcast(nullptr,nullptr,nullptr, Magnitude, Old, Current);
+    // ↑ 前三个 nullptr —— OnRep 没有施法者信息
+
+    if (!bOutOfHealth && CurrentHealth <= 0.f)   // ← !bOutOfHealth 保证只触发一次
+        OnOutOfHealth.Broadcast(...);
+    bOutOfHealth = CurrentHealth <= 0.f;
+}
+```
+
+### UYMRPGDamageExecution — 伤害计算管线
+
+`UGameplayEffectExecutionCalculation` 是 GAS 中最灵活的属性修改方式，与简单 Modifier / MMC 对比：
+
+| 途径 | 能力 | 场景 |
+|------|------|------|
+| GE Modifier | 固定系数/倍率直接改属性 | 回血10点 |
+| MMC | 自定义公式算修改量 | 伤害=攻击力×1.5 |
+| ExecutionCalculation | 自由捕获多属性、读Tag、写多属性 | 完整伤害公式 |
+
+**核心结构 — FDamageStatics**：
+
+```cpp
+struct FDamageStatics
+{
+    FGameplayEffectAttributeCaptureDefinition BaseDamageDef;
+
+    FDamageStatics()
+    {
+        BaseDamageDef = FGameplayEffectAttributeCaptureDefinition(
+            UYMRPGCharacterAttributeSet::GetDamageAttribute(),
+            EGameplayEffectAttributeCaptureSource::Source,  // 从施法者身上捕获
+            true  // Snapshot=true: GE Spec创建时快照，而非应用时再读
+        );
+    }
+};
+```
+
+三个参数含义：
+- **捕获目标属性**：攻击者的 Damage 值
+- **`CaptureSource::Source`**：从 GE 施法者（攻击者）身上读；`::Target` 即从目标读
+- **`Snapshot = true`**：GE Spec 创建时就快照 —— 弓箭射出时记录攻击力，飞2秒后命中仍用射出时的值，不受中途虚弱影响
+
+**构造函数**：`RelevantAttributesToCapture.Add(DamageStatics().BaseDamageDef)` 注册要捕获的属性。
+
+**Execute_Implementation**（`#if WITH_SERVER_CODE` 仅服务器执行）：
+1. 获取 `FGameplayEffectSpec`，提取 SourceTags / TargetTags
+2. `AttemptCalculateCapturedAttributeMagnitude` 读出已捕获属性值
+3. `DamageDone = Max(BaseDamage, 0.f)` 保底非负
+4. `AddOutputModifier` → 写到目标的 Damage 元属性
+
+**与 AttributeSet 的完整流水线**：
+
+```
+GE_Attack 应用
+  → PreGameplayEffectExecute (快照)
+  → Execute_Implementation (捕获攻击者Damage → 写目标Damage)
+  → PostGameplayEffectExecute (Damage > 0 → Health = Clamp(Health - Damage))
+  → OnHealthChanged.Broadcast → 复制 → 客户端 OnRep_Health
+```
+
+**为什么中间加 Damage 元属性**：
+- 伤害处理统一入口：不管近战/远程/DOT/AOE，都走 `case Damage` 分支
+- 伤害可被拦截：护盾、免疫在 PostGameplayEffectExecute 集中处理
+- `HideFromModifiers` 强制所有伤害走 Execution 通道
+
+**当前局限与扩展**：目前只捕获一个属性（Damage）。完整版应捕获 Attack / Defense / ArmorPen / CritRate / ElementTag，在 Execute_Implementation 中合并计算。
+
+### GE 资产侧绑定
+
+GE 资产不使用 `Modifiers` 数组，而是在 `Execution` 区域指定 `UYMRPGDamageExecution` 类。GE 应用时自动找到 Execution 类、创建实例、调用 `Execute_Implementation`。
+
+### 蓝图中添加注释
+
+- 选中节点 → 按 **C** → 创建注释框包裹节点，可修改标题和颜色
+- 右键空白处 → 搜索 "Comment" → 独立注释节点
+- Details 面板填写 "描述" (Description) → 节点上方显示灰色小字
+
+### GA_Melee 蓝图节点图完整分析
+
+蓝图事件图实现了完整的近战攻击流程，分六个阶段：
+
+**阶段一：代价/冷却检查**
+```
+K2_ActivateAbility → K2_CheckAbilityCost → K2_CheckAbilityCooldown → BooleanAND
+  ├─ True → CommitAbility → SelectMontage → PlayMontageAndWait
+  └─ False → K2_EndAbility (直接终止)
+```
+`K2_CheckAbilityCost` / `K2_CheckAbilityCooldown` 是 UE GAS 内置蓝图函数，读 GE CDO 上的 Cost/Cooldown 配置。蓝图显式写是因为覆盖了 `K2_ActivateAbility` 事件，不会自动走 C++ 的 `ActivateAbility` 默认流程。
+
+**阶段二：Montage 播放**
+`SelectMontage`（蓝图自定义纯函数，根据地面/空中/奔跑状态选 Montage）→ `PlayMontageAndWait`。四个结束引脚（OnCompleted/OnBlendOut/OnInterrupted/OnCancelled）全部接 `K2_EndAbility`。
+
+**阶段三：服务器端碰撞检测**
+`K2_HasAuthority` → True → `CapsuleTraceSingleForObjects`。Trace 只在服务器跑 —— 客户端播动画（预测），服务器判定打中没打中。MeleeTraceLogic（蓝图纯函数）提供 StartTrace / EndTrace / IgnoreActors / YMRPGCharacterBase。
+
+**阶段四：命中验证（遮挡检测）**
+命中后通过第二次 `LineTraceMulti` 检查目标是否被墙壁/障碍遮挡。两段 Trace 设计：第一次找 Pawn，第二次验证视线通畅——防止穿墙打人。
+
+**阶段五：三路并行输出（ExecutionSequence）**
+- then_0：距离>100 → `ApplyRootMotionConstantForce`（近身吸附）。`NormalizeToRange(Distance, 0, MaxDistance)` 把距离映射到 [0,1]，越远推力越弱
+- then_1：`MakeEffectContext` → `EffectContextAddHitResult` → `BP_ApplyGameplayEffectToTarget(TargetASC, GE_Class)` → `K2_ExecuteGameplayCueWithParams(GameplayCue.Character.Hit)`
+- then_2：`PlaySoundAtLocation`（Shinbi技能音效）
+
+**阶段六：CustomEvent "Melee Impact"**
+同样调用 `PlaySoundAtLocation`，但有一个调用节点报 `ErrorMsg="Could not find Melee Impact"` —— 蓝图内函数名错配，待修复 Bug。
+
+**蓝图与 C++ 衔接点**：
+| 蓝图做 | C++做 | 衔接 |
+|--------|--------|------|
+| 选 Montage | ComboComponent 管理连招索引 | 蓝图 SelectMontage 可改为从 ComboComponent 读 |
+| GE 资产指定 | UYMRPGDamageExecution 计算伤害 | 蓝图 GE_Melee 指定 ExecutionClass |
+| Trace 碰撞 | — | 纯蓝图实现 |
+| 结束技能 | PostGameplayEffectExecute 广播死亡 | C++ AttributeSet 侧事件未回传蓝图 |
 
 </details>
