@@ -9,6 +9,7 @@
 - [2026-05-13](#ymrpg-2026-05-13) — ComboComponent 连招组件、AnimNotify vs AnimNotifyState、const 成员函数返回指针、ASC StopMontageIfCurrent 与 Montage 双通路、ProcessAbilityInput 三阶段、ENetMode 网络模式、bOrientRotationToMovement
 - [2026-05-15](#ymrpg-2026-05-15) — Attribute 角色与功能、ATTRIBUTE_ACCESSORS 宏展开、FGameplayEffectSpec 运行时实例、CDO vs UClass、UAttributeSet 五个钩子函数、GetLifetimeReplicatedProps、REPNOTIFY_Always vs OnChanged、__super vs Super
 - [2026-05-16](#ymrpg-2026-05-16) — AttributeSet 编译错误排查、`override` 误用、`Lifetime` 大小写、Attribute 体系完整架构、DamageExecution 伤害计算管线、GA_Melee 蓝图节点图分析
+- [2026-05-18](#ymrpg-2026-05-18) — HealthComponent 实现与编译错误排查、UGameFrameworkComponent 继承体系、BlueprintAssignable、mutable、UFUNCTION 元数据、FGameplayEffectSpec 与 GE 的关系、SetNumericAttributeBase、Component Tag 归属原则、生命/死亡系统完整链路
 
 ---
 
@@ -919,5 +920,192 @@ K2_ActivateAbility → K2_CheckAbilityCost → K2_CheckAbilityCooldown → Boole
 | GE 资产指定 | UYMRPGDamageExecution 计算伤害 | 蓝图 GE_Melee 指定 ExecutionClass |
 | Trace 碰撞 | — | 纯蓝图实现 |
 | 结束技能 | PostGameplayEffectExecute 广播死亡 | C++ AttributeSet 侧事件未回传蓝图 |
+
+</details>
+
+---
+
+<details>
+<summary><b>2026-05-18</b></summary>
+
+### YMRPGHealthComponent 生命周期组件
+
+实现了一个独立于 Character 的 HealthComponent，负责：
+
+- **死亡状态机**：`NotDead → DeathStarted → DeathFinished`（不可逆三态）
+- **属性查询 API**：GetHealth / GetMaxHealth / GetMana / GetMaxMana / GetHealthPercent / GetManaPercent / IsDeadOrDying
+- **蓝图事件广播**：OnDeathStarted、OnDeathFinished、OnHealthChanged、OnMaxHealthChanged、OnManaChanged、OnMaxManaChanged
+- **ASC Tag 同步**：死亡时自动管理 `Status.Death.Dying` / `Status.Death.Dead` 的 LooseGameplayTag
+
+**组件基类改造**：`YMRPGComponentBase` 从 `UActorComponent` 改为继承 `UGameFrameworkComponent`（ModularGameplay 插件），所有子类构造函数改为接收 `const FObjectInitializer&` 参数。
+
+### UGameFrameworkComponent 继承体系
+
+`UGameFrameworkComponent` 本身只提供三个便捷访问器：`GetGameInstance<T>()`、`HasAuthority()`、`GetWorldTimerManager()`，以及一个 `TComponentIterator<T>`。真正有价值的是它的四个子类：
+
+| 子类 | 挂载到 | 提供 |
+|------|--------|------|
+| `UPawnComponent` | Pawn | `GetPawn<T>()`, `GetPlayerState<T>()`, `GetController<T>()` |
+| `UControllerComponent` | Controller | `GetController<T>()`, `GetViewTarget<T>()`, `PlayerTick()`, `ReceivedPlayer()` |
+| `UGameStateComponent` | GameState | `GetGameState<T>()`, `GetGameMode<T>()`, `HandleMatchHasStarted/Ended()` |
+| `UPlayerStateComponent` | PlayerState | `GetPlayerState<T>()`, `GetPawn<T>()`, `Reset()`, `CopyProperties()` |
+
+**99% 的情况下不直接继承 UGameFrameworkComponent**，而是继承对应 Owner 类型的子类。Lyra 里 `ULyraHealthComponent : UPawnComponent`、`ULyraHeroComponent : UPawnComponent`。直接继承仅用于不依赖特定 Owner 类型的通用组件。
+
+配套接口 `IGameFrameworkInitStateInterface` 解决多 Component 间的初始化顺序问题——配合 `UGameFrameworkComponentManager` 实现有序初始化与依赖就绪检查。
+
+### BlueprintAssignable 委托说明符
+
+标记 Multicast Delegate 使其在蓝图中可作为事件节点被绑定/解绑。四个说明符的分工：
+
+| 说明符 | 蓝图可做什么 |
+|--------|-------------|
+| `BlueprintAssignable` | 绑定/解绑事件处理函数 |
+| `BlueprintCallable` | 调用（广播）委托（仅 Dynamic Multicast） |
+| 两者同时用 | 蓝图既能绑定也能广播 |
+
+通常 `BlueprintAssignable` 和 `BlueprintCallable` 一起用——前者让蓝图能**监听**事件，后者让 C++/蓝图能**广播**事件。
+
+### mutable 关键字
+
+C++ 关键字，突破 `const` 约束——允许被标记的成员变量在 `const` 成员函数中被修改。三类典型场景：缓存/延迟计算、统计/调试计数、`mutable std::mutex`（const 方法的线程安全）。现阶段 GAS 上层玩法逻辑中很少用到，知道"打破 const 用的"即够。
+
+### UFUNCTION 元数据
+
+**`BlueprintCallable` vs `BlueprintPure`**：
+
+| | Pure（纯函数） | Callable（非纯函数） |
+|---|---|---|
+| 执行引脚 | 无 | 有（白色箭头） |
+| 调用时机 | 每次用到返回值都重新算 | 只沿执行流触发 |
+| 有无副作用 | 无 | 可以修改状态 |
+
+四行完全等价：`BlueprintPure` / `BlueprintPure = true` / `BlueprintCallable, BlueprintPure = true` / `BlueprintCallable, BlueprintPure`。惯例：纯函数写 `BlueprintPure`，非纯函数写 `BlueprintCallable`。
+
+**`Category = "YMRPG|Health"`**：`|` 是层级分隔符，在蓝图右键菜单中形成 YMRPG → Health 的子类目。纯 UI 组织，不影响逻辑。
+
+**`Meta = (ExpandBoolAsExecs = "ReturnValue")`**：返回 bool 的函数，将单条返回值引脚展开为 True / False 两条执行输出线，节省一个 `Branch` 节点。
+
+### FGameplayEffectSpec 与 GE 的引用关系
+
+`FGameplayEffectSpec` 通过 `TObjectPtr<const UGameplayEffect> Def` 直接持有源 GE 资产指针，**不需要 ASC 就能找到 GE**。需要 ASC 的是另一层：
+
+| 场景 | 需要什么 |
+|------|---------|
+| 读 GE 静态数据（Modifier 列表、Duration Policy、Tag） | 仅 `Spec.Def` |
+| 计算实际 Modifier 数值（属性快照、MMC） | `Spec` + **Target ASC** |
+| 计算实际 Duration（属性基准持续） | `Spec` + Source ASC + Target ASC |
+
+`Def` 给配置长什么样，ASC 给实际算出来是多少。
+
+### SetNumericAttributeBase
+
+直接写入属性的 **Base 值**（即 GE Modifier 聚合前的底层值）。属性最终值 = Base值 + GE Modifiers 聚合结果。SetNumericAttributeBase 写的是前半部分。
+
+| 函数 | 读/写 | 含义 |
+|------|-------|------|
+| `SetNumericAttributeBase` | 写 | 直接设 Base 值 |
+| `GetNumericAttributeBase` | 读 | 读 Base 值（排除 GE Modifier） |
+| `GetNumericAttribute` | 读 | 读最终值（Base + GE Modifier 聚合后） |
+
+**不是常规玩法手段**——常规改属性应靠 GE。`SetNumericAttributeBase` 主要用于属性初始化阶段（AttributeSetInitter 从 DataTable 写入初始值）。平常写 GA/GE 逻辑不应直接调它。
+
+### Component 中 Tag 的归属原则
+
+**不是所有 Tag 都走 ASC**。判断标准：这个 Tag 是否需要被 GAS 框架层感知。
+
+| Tag 用途 | 放哪里 | 例子 |
+|----------|--------|------|
+| 阻止 GA 激活 | ASC | `State.Dead`、`State.Stunned` |
+| GE ApplicationTagRequirements | ASC | `State.ShieldActive` |
+| GE 自动添加/移除 | ASC（通过 GE GrantedTags） | Buff 标记 |
+| 其他 Component 需查询 Actor 状态 | ASC | 动画蓝图判断 `State.InAir` |
+| 纯组件内部状态、数据标记 | 组件自己的 `FGameplayTagContainer` | NumberPop 样式选择、连招内部标记 |
+
+ASC 上的 Tag 有引擎级开销：Add/Remove LooseTag 会触发 GA 激活条件重新评估、GE 生效条件重新检查、网络复制。组件内部 Tag 只是普通变量，无这些副作用。
+
+### HealthComponent 编译错误排查（四个问题）
+
+**错误 1 — API 宏拼写错误**：`YMORPG_API` 应为 `YMRPG_API`。字母顺序错了，链接阶段找不到导出符号。
+
+**错误 2 — OnRep_DeathState 缺少 UFUNCTION()**：RepNotify 函数必须标记 `UFUNCTION()`，UHT 靠此宏识别。光写 `virtual` 不行。正确写法：`UFUNCTION() virtual void OnRep_DeathState(EYMRPGDeathState OldValue);`
+
+**错误 3 — 委托签名不匹配**：`FYMRPGAttributeEvent` 的第三个参数是 `const FGameplayEffectSpec*`（指针），但 HealthComponent 的 5 个 Handler（HandleHealthChanged 等）全写成了 `const FGameplayEffectSpec&`（引用）。`AddUObject` 绑定时签名对不上，编译报错。
+
+**错误 4 — 比较运算符误用作赋值**：构造函数里 `DeathState == EYMRPGDeathState::NotDead;` 是 `==` 而非 `=`，这是一个无副作用的比较表达式，DeathState 从未被初始化。
+
+### 生命/死亡系统完整链路
+
+#### 伤害触发死亡的调用链
+
+```
+GE 应用
+  → PreGameplayEffectExecute（快照 HealthBeforeAttributeChange）
+  → Execute_Implementation（捕获攻击者属性 → 写入目标 Damage）
+  → 引擎执行 Modifier → PostGameplayEffectExecute
+      ├─ case Damage: Health = Clamp(Health - Damage, 0, MaxHealth)
+      ├─ if Health 变化: OnHealthChanged.Broadcast(Instigator, Causer, &Spec, ...)
+      └─ if Health ≤ 0 && !bOutOfHealth: OnOutOfHealth.Broadcast(...)
+  → HealthComponent::HandleOutOfHealth
+      └─ #if WITH_SERVER_CODE  // 仅服务端
+         StartDeath()
+           ├─ DeathState = DeathStarted
+           ├─ ASC->SetLooseGameplayTagCount(Status.Death.Dying, 1)
+           ├─ OnDeathStarted.Broadcast(Owner)
+           └─ Owner->ForceNetUpdate()
+```
+
+#### 网络同步：两条并行通道
+
+**通道 A — DeathState 直接复制**：
+
+```
+[Server] StartDeath() → DeathState = DeathStarted ──复制──→ [Client] OnRep_DeathState
+  → 快照 NewValue → 恢复 OldValue → 重放 StartDeath()
+  → Tag/Event 在客户端以相同顺序执行
+```
+
+`OnRep_DeathState` 采用"重放"而非"赋值"设计——先恢复旧值，再调用 StartDeath/FinishDeath，保证客户端经历和服务端完全一样的 Tag 和 Broadcast 顺序。
+
+**通道 B — AttributeSet 属性复制**：
+
+```
+[Server] PostGameplayEffectExecute → [Client] OnRep_Health
+  → OnHealthChanged.Broadcast(nullptr, nullptr, nullptr, ...)
+  → if Health ≤ 0: OnOutOfHealth.Broadcast(nullptr, nullptr, nullptr, ...)
+```
+
+客户端 OnRep 的三个指针参数全为 nullptr（属性复制不传上下文）。因此 HealthComponent 的 HandleOutOfHealth 用 `#if WITH_SERVER_CODE` 守卫——客户端不通过属性变化触发死亡，死亡状态完全由通道 A 驱动。
+
+**两通道协调**：`WITH_SERVER_CODE` 是关键保险——无论 OnRep_DeathState 和 OnRep_Health 谁先到达客户端，都能正确收敛，不会重复触发死亡。
+
+#### DeathState 状态机
+
+```
+NotDead ──StartDeath()──→ DeathStarted ──FinishDeath()──→ DeathFinished
+  ↑                         │
+  └────── 不可逆 ───────────┘
+
+StartDeath() 守卫: DeathState != NotDead → return
+FinishDeath() 守卫: DeathState != DeathStarted → return
+```
+
+每个状态对应的 ASC Tag：
+
+| 状态 | Status.Death.Dying | Status.Death.Dead |
+|------|--------------------|-------------------|
+| NotDead | 0 | 0 |
+| DeathStarted | 1 | 0 |
+| DeathFinished | 0 | 1 |
+
+#### 其他发现
+
+**PostGameplayEffectExecute 中存在一个潜在问题**：MaxMana 变化时广播 `OldValue` 传了 `MaxHealthBeforeAttributeChange`（应为 Mana 系自己的快照）。PreGameplayEffectExecute 只快照了 Health 和 MaxHealth，没有快照 Mana。当前影响不大（委托主要给 UI 做动画），但后续做精确蓝量变化反馈需修复。
+
+### Game Feature
+
+UE 的模块化功能插件系统，核心解决"功能按需动态加载/卸载"。每个 Game Feature 是一个 `.uplugin`，通过 `GameFeatureData` DataAsset 声明 Actions（`AddComponent`、`AddDataRegistry` 等），由 `GameFeaturesSubsystem` 统一管理生命周期。Lyra 以此将每个游戏模式拆为独立插件，Fortnite 以此实现限时模式。
+
+**当前项目不需要**——单玩法学习项目无此复杂度。但 GAS 的 GA/GE/AttributeSet 注册机制与 Game Feature 加载入口完全通用，学会 GAS 后回头理解它很快。
 
 </details>

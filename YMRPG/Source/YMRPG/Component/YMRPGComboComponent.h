@@ -11,7 +11,7 @@ class YMRPG_API UYMRPGComboComponent : public UYMRPGComponentBase
 	GENERATED_BODY()
 
 public:
-    UYMRPGComboComponent();
+    UYMRPGComboComponent(const FObjectInitializer& ObjectInitializer);
 
 	UFUNCTION(BlueprintCallable, Category = "YMRPG|Fight|Combo") 
 	int32 GetComboIndex() const;

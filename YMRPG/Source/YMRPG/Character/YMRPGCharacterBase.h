@@ -27,6 +27,7 @@ class AYMRPGPlayerController;
 class AYMRPGPlayerState;
 class UYMRPGGameplayAbility;
 class UYMRPGCharacterAttributeSet;
+class UYMRPGHealthComponent;
 
 UCLASS(Abstract)
 class YMRPG_API AYMRPGCharacterBase : public ACharacter, public IAbilitySystemInterface, public IGameplayCueInterface, public IGameplayTagAssetInterface
@@ -49,6 +50,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "YMRPG|Character")
 	FORCEINLINE UYMRPGComboComponent* GetYMRPGComboComponent() const { return ComboComponent; }
 
+	UFUNCTION(BlueprintCallable, Category = "YMRPG|Character")
+	FORCEINLINE UYMRPGHealthComponent* GetYMRPGHealthComponent() const { return HealthComponent; }
+
 	virtual UAbilitySystemComponent* GetAbilitySystemComponent() const override;
 
 
@@ -60,6 +64,21 @@ public:
 protected:
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+
+	
+	UFUNCTION()
+	virtual void OnDeathStarted(AActor* OwingActor);
+
+	UFUNCTION()
+	virtual void OnDeathFinished(AActor* OwingActor);
+
+	void DisableMovementAndCollision();
+
+	void DestoryDueToDeath();
+	void UninitAndDestory();
+
+	UFUNCTION(BlueprintImplementableEvent, meta = (DisplayName = "OnDeathFinished"))
+	void K2_OnDeathFinished();
 
 protected:
 	UPROPERTY(BlueprintReadWrite, EditDefaultsOnly, Category="YMRPG|Ability", meta=(AllowPrivateAccess="true"))
@@ -73,6 +92,9 @@ protected:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "YMRPG|Character", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UYMRPGComboComponent> ComboComponent;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "YMRPG|Character", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UYMRPGHealthComponent> HealthComponent;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "YMRPG|GAS", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UYMRPGCharacterAttributeSet> CharacterSet;

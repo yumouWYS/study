@@ -1,6 +1,6 @@
 #include "YMRPGComponentBase.h"
 
-UYMRPGComponentBase::UYMRPGComponentBase()
+UYMRPGComponentBase::UYMRPGComponentBase(const FObjectInitializer& ObjectInitializer) :Super(ObjectInitializer)
 {
 	PrimaryComponentTick.bCanEverTick = false;
 }

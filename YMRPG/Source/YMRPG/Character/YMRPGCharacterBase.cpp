@@ -5,6 +5,10 @@
 #include "YMRPGGameplayAbility.h"
 #include "YMRPGComboComponent.h"
 #include "YMRPGCharacterAttributeSet.h"
+#include "YMRPGHealthComponent.h"
+
+#include "Components/CapsuleComponent.h"
+#include "GameFramework/CharacterMovementComponent.h"
 
 AYMRPGCharacterBase::AYMRPGCharacterBase(const FObjectInitializer& ObjectInitializer):Super(ObjectInitializer)
 {
@@ -22,6 +26,10 @@ AYMRPGCharacterBase::AYMRPGCharacterBase(const FObjectInitializer& ObjectInitial
 	ComboComponent = CreateDefaultSubobject<UYMRPGComboComponent>(TEXT("ComboComponent"));
 	ComboComponent->SetIsReplicated(false);
 
+	HealthComponent = CreateDefaultSubobject<UYMRPGHealthComponent>(TEXT("HealthComponent"));
+	HealthComponent->SetIsReplicated(true);
+	HealthComponent->OnDeathStarted.AddDynamic(this, &ThisClass::OnDeathStarted);
+	HealthComponent->OnDeathFinished.AddDynamic(this, &ThisClass::OnDeathFinished);
 
 	NetUpdateFrequency = 100.f;
 }
@@ -99,10 +107,60 @@ void AYMRPGCharacterBase::BeginPlay()
 			AbilitiesToActive.Add(TmpAbilityPair.Key, AbilityHandle);
 		}
 	}
+
+	HealthComponent->InitializeWithAbilitySystem(AbilityComponent);
 }
 
 void AYMRPGCharacterBase::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 
 	Super::EndPlay(EndPlayReason);
+}
+
+void AYMRPGCharacterBase::OnDeathStarted(AActor* OwingActor)
+{
+	DisableMovementAndCollision();
+}
+
+void AYMRPGCharacterBase::OnDeathFinished(AActor* OwingActor)
+{
+	GetWorld()->GetTimerManager().SetTimerForNextTick(this, &ThisClass::DestoryDueToDeath);
+}
+
+void AYMRPGCharacterBase::DisableMovementAndCollision()
+{
+	if (Controller)
+	{
+		Controller->SetIgnoreMoveInput(true);
+	}
+
+	UCapsuleComponent* Capsual = GetCapsuleComponent();
+	check(Capsual);
+	Capsual->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	Capsual->SetCollisionResponseToAllChannels(ECR_Ignore);
+
+	UCharacterMovementComponent* Movement = CastChecked<UCharacterMovementComponent>(GetCharacterMovement());
+	Movement->StopMovementImmediately();
+	Movement->DisableMovement();
+
+}
+
+void AYMRPGCharacterBase::DestoryDueToDeath()
+{
+	K2_OnDeathFinished();
+
+	UninitAndDestory();
+}
+
+void AYMRPGCharacterBase::UninitAndDestory()
+{
+	if (GetLocalRole() == ROLE_Authority)
+	{
+		DetachFromControllerPendingDestroy();
+		SetLifeSpan(0.1f);
+	}
+
+	HealthComponent->UninitializeFromAbilitySystem();
+
+	SetActorHiddenInGame(true);
 }

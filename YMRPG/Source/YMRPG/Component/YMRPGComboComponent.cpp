@@ -1,6 +1,6 @@
 #include "YMRPGComboComponent.h"
 
-UYMRPGComboComponent::UYMRPGComboComponent()
+UYMRPGComboComponent::UYMRPGComboComponent(const FObjectInitializer& ObjectInitializer) :Super(ObjectInitializer)
 {
 	PrimaryComponentTick.bCanEverTick = true;
 }
