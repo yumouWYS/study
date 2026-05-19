@@ -10,6 +10,7 @@
 - [2026-05-15](#ymrpg-2026-05-15) — Attribute 角色与功能、ATTRIBUTE_ACCESSORS 宏展开、FGameplayEffectSpec 运行时实例、CDO vs UClass、UAttributeSet 五个钩子函数、GetLifetimeReplicatedProps、REPNOTIFY_Always vs OnChanged、__super vs Super
 - [2026-05-16](#ymrpg-2026-05-16) — AttributeSet 编译错误排查、`override` 误用、`Lifetime` 大小写、Attribute 体系完整架构、DamageExecution 伤害计算管线、GA_Melee 蓝图节点图分析
 - [2026-05-18](#ymrpg-2026-05-18) — HealthComponent 实现与编译错误排查、UGameFrameworkComponent 继承体系、BlueprintAssignable、mutable、UFUNCTION 元数据、FGameplayEffectSpec 与 GE 的关系、SetNumericAttributeBase、Component Tag 归属原则、生命/死亡系统完整链路
+- [2026-05-19](#ymrpg-2026-05-19) — AHUD 与 WBP/UUserWidget 架构关系、Sequence 流控制节点、统一事件源（GAS 事件总线 vs 观察者模式）、工厂模式在 UE/GAS 中的四层体现
 
 ---
 
@@ -1107,5 +1108,188 @@ FinishDeath() 守卫: DeathState != DeathStarted → return
 UE 的模块化功能插件系统，核心解决"功能按需动态加载/卸载"。每个 Game Feature 是一个 `.uplugin`，通过 `GameFeatureData` DataAsset 声明 Actions（`AddComponent`、`AddDataRegistry` 等），由 `GameFeaturesSubsystem` 统一管理生命周期。Lyra 以此将每个游戏模式拆为独立插件，Fortnite 以此实现限时模式。
 
 **当前项目不需要**——单玩法学习项目无此复杂度。但 GAS 的 GA/GE/AttributeSet 注册机制与 Game Feature 加载入口完全通用，学会 GAS 后回头理解它很快。
+
+</details>
+
+---
+
+<details>
+<summary><b>2026-05-19</b></summary>
+
+### AHUD 与 WBP（UUserWidget）的架构关系
+
+**层级定位**：
+
+```
+GameMode (指定 HUDClass)
+  └─ PlayerController (创建并持有 HUD)
+       └─ AHUD (AActor，由框架管理生命周期)
+            └─ UUserWidget (WBP — 实际的 UMG UI 内容)
+```
+
+- **`AHUD`** 是 `AActor`，受 GameMode/PlayerController 管控，存在于游戏世界中，参与 Tick。是游戏框架层的 UI 管理者。
+- **WBP（Widget Blueprint）** 是 `UUserWidget` 的蓝图子类，属于 UMG 框架层。实际的 UI 控件树（按钮、血条、文字、动画等）都在 UUserWidget 里。
+
+**职责分工**：
+
+| | AHUD | UUserWidget (WBP) |
+|---|---|---|
+| 是什么 | AActor，游戏框架层 | UObject，UI 框架层 |
+| 生命周期 | 由 GameMode 在游戏开始时生成 | 由代码/蓝图动态 Create / AddToViewport |
+| 渲染方式 | 传统 Canvas 绘制（`DrawHUD()`） | UMG 控件树，Slate 底层渲染 |
+| 典型用途 | UI 容器/入口，管理 Widget 生命周期 | 具体 UI 面板：主界面、血条、背包等 |
+
+**现代 UE5 的正确模式**：AHUD 趋向于做薄容器——在 `BeginPlay()` 中 `CreateWidget` → `AddToViewport` 挂载主 UI，持有子 Widget 引用。具体的 UI 逻辑（血量绑定、按钮事件、动画）全部下沉到 WBP 中。项目中 `AYMRPGHUD` 当前为空壳，后续可在此创建 `WBP_GameMainUI`。
+
+**访问链路**：`PlayerController->GetHUD()` → `Cast<AYMRPGHUD>()` → HUD 持有的主 Widget。项目中 `AYMRPGPlayerController::GetYMRPGHUD()` 已搭好该链路。
+
+### Sequence 流控制节点
+
+将一个执行脉冲按顺序拆成多个分支：
+
+```
+事件触发 ──→ Sequence ──→ Then 0（先执行，完成后再走 Then 1）
+                        ├──→ Then 1
+                        └──→ Then 2
+```
+
+**典型场景**：`BeginPlay` 初始化 — Then 0 初始化 AttributeSet → Then 1 绑定 UI → Then 2 播放动画 → Then 3 启用输入。
+
+**关键注意**：若某个 Then 分支使用了 **`Delay`**（Latent 节点），后续 Then **不会等待它**——Delay 之后逻辑异步执行，Sequence 不暂停。需要"等某件事完成再继续"应用 `Do N` + 回调，或 StateTree / AbilityTask。
+
+**与相关节点区别**：`Branch`（条件选一）、`FlipFlop`（交替走 AB）、`DoOnce`（仅一次）、`MultiGate`（顺序/随机走一，可重置）。
+
+### 统一事件源 — GAS 核心设计思想
+
+**定义**：`UAbilitySystemComponent`（ASC）就是统一事件源——一个中心化的事件调度枢纽。所有和玩法相关的状态变化（属性改变、标签变化、技能激活/结束、GE 应用/移除），全部经由 ASC 这个单一入口分发。
+
+**在项目中的四层体现**：
+
+**1. 统一委托签名 — AttributeSet 层**：
+```cpp
+// YMRPGAttributeSet.h — 所有属性变化用同一套六参数签名
+DECLARE_MULTICAST_DELEGATE_SixParams(
+    FYMRPGAttributeEvent,
+    AActor* /*EffectInstigator*/,
+    AActor* /*EffectCauser*/,
+    const FGameplayEffectSpec* /*EffectSpec*/,
+    float /*EffectMagnitude*/,
+    float /*OldValue*/,
+    float /*NewValue*/
+);
+```
+
+**2. ASC 作为事件总线 — 绑定与分发**：
+```cpp
+// HealthComponent 向 ASC 管理的 AttributeSet 注册回调
+HealthSet->OnHealthChanged.AddUObject(this, &UYMRPGHealthComponent::HandleHealthChanged);
+// 监听者不需要知道"谁造成了变化"——ASC 自动把 Instigator/Causer/Spec 塞进回调
+```
+
+**3. GameplayTag 作为事件语言**：
+```cpp
+// 通过 ASC 的标签系统广播状态，而非直接通知各个监听者
+ASC->SetLooseGameplayTagCount(Status_Death_Dying, 1);  // 濒死
+ASC->SetLooseGameplayTagCount(Status_Death_Dead, 1);   // 确认死亡
+```
+UI、AI、技能系统无需持有 HealthComponent 引用，只需监听 ASC 上的 Tag 变化。
+
+**4. 输入也汇入统一事件源**：
+```cpp
+// 输入不直接激活技能，而是把 Tag 交给 ASC 统一匹配和调度
+void AbilityInputTagPressed(const FGameplayTag& InputTag)
+{
+    for (auto& Spec : ActivatableAbilities.Items)
+        if (Spec.DynamicAbilityTags.HasTagExact(InputTag))
+            InputPressedSpecHandles.AddUnique(Spec.Handle);
+}
+```
+
+**数据流全景**：
+```
+输入(Tag) ─┐
+GE 应用 ────┤
+                  ▼
+           ┌──────────────┐
+           │ ASC (统一事件源)│
+           │ ├─ AttributeSet │
+           │ ├─ GameplayTag  │
+           │ ├─ GameplayEvent│
+           │ └─ AbilitySpec  │
+           └──────┬─────────┘
+                  │
+     ┌────────────┼──────────────┐
+     ▼            ▼              ▼
+ HealthComp    UI(WBP)       ComboComp
+```
+
+#### 与观察者模式的本质区别
+
+| | 经典观察者模式 | GAS 统一事件源 |
+|---|---|---|
+| 关系 | 一对多，Subject 持有 Observer 列表 | 多对多，所有事件经过 ASC "总线" |
+| 订阅方式 | `subject.AddObserver(this)` | 按 Tag 订阅：`ASC->RegisterGameplayTagEvent(Tag)` |
+| 耦合度 | Observer 需知道具体 Subject 是谁 | 监听者只需知道 ASC + Tag |
+| 事件格式 | 每个 Subject 自定义签名 | 统一签名（`FYMRPGAttributeEvent` 六参数） |
+| 过滤机制 | 无内置过滤，Observer 自己判断 | Tag 天然就是过滤器，按语义订阅 |
+| 网络 | 需自行处理 | ASC 内置 Prediction Key、ReplicatedEvent |
+
+**核心差异：从"找对象"到"听广播"**。观察者模式需要知道向哪个对象注册；GAS 只需要知道 ASC 和一些 Tag，通过 Tag 抽象实现生产者和消费者完全解耦。这更像**事件总线（Event Bus）**或**中介者（Mediator）**模式。
+
+**设计启发**：GameplayTag 同时承担三重角色——事件类型、过滤条件、状态标记。一套 Tag 系统避免为"属性变化通知""状态查询""技能触发条件"设计三套 API。
+
+### 工厂模式在 UE/GAS 中的四层体现
+
+**核心思想**：把"创建哪个具体类"的决策从调用方推迟到子类或配置层。调用方只依赖抽象接口，不关心具体实现。
+
+**第一层 — UClass 作为元工厂（反射系统根基）**：
+每个 `UClass` 本身就是该类型的工厂对象，`NewObject<T>()` / `SpawnActor<T>()` / `CreateDefaultSubobject<T>()` 底层都走到 `UClass`，不需要 switch-case。
+
+**第二层 — `TSubclassOf<T>` 参数化工厂（将类型选择暴露给蓝图）**：
+```cpp
+// C++ 只约定"我需要一个 UUserWidget"，具体哪个 WBP 由蓝图配置决定
+UPROPERTY(EditAnywhere)
+TSubclassOf<UUserWidget> MobileControlsWidgetClass;
+
+// 工厂调用，不关心具体类型
+MobileControlsWidget = CreateWidget<UUserWidget>(this, MobileControlsWidgetClass);
+```
+同理：`EnemyClass` → `SpawnActor<ACombatEnemy>()`、`CharacterClass` → `SpawnActor`。策划/美术在蓝图或 DataAsset 中配置，C++ 零改动。
+
+**第三层 — GameMode 作为教科书级工厂方法模式**：
+```cpp
+AYMRPGGameMode::AYMRPGGameMode()
+{
+    DefaultPawnClass      = AYMRPGCharacter::StaticClass();
+    PlayerStateClass      = AYMRPGPlayerState::StaticClass();
+    HUDClass              = AYMRPGHUD::StaticClass();
+    PlayerControllerClass = AYMRPGPlayerController::StaticClass();
+    GameStateClass        = AYMRPGGameState::StaticClass();
+}
+```
+父类 `AGameModeBase` 定义"需要创建什么"的框架流程，子类通过覆盖这五个属性决定"具体创建哪个类"。引擎调用 `SpawnDefaultPawnFor()` 时不需知道 Pawn 具体类型。
+
+**第四层 — `GiveAbility` 作为技能实例工厂**：
+```cpp
+// ASC 是技能实例的工厂：类 → CDO（原型）→ Spec → 运行时实例
+UYMRPGGameplayAbility* AbilityCDO = AbilityClass->GetDefaultObject<UYMRPGGameplayAbility>();
+FGameplayAbilitySpec AbilitySpec(AbilityCDO, 1);
+const FGameplayAbilitySpecHandle Handle = ASC->GiveAbility(AbilitySpec);
+```
+CDO（Class Default Object）在此充当**原型模式（Prototype）**角色——用默认对象作模板复制出运行时实例，避免每次创建重新计算默认值。这是"工厂 + 原型"的混合设计。
+
+**四层归纳**：
+
+| 层级 | 工厂角色 | 项目体现 |
+|---|---|---|
+| UClass 元工厂 | `UClass` 本身 | 所有 `NewObject` / `SpawnActor` 底层 |
+| `TSubclassOf` 参数化 | 类型选择暴露为可配置属性 | `MobileControlsWidgetClass`、`EnemyClass` |
+| GameMode 工厂方法 | GameMode 决定框架类 | `DefaultPawnClass`、`HUDClass` 等五个属性 |
+| ASC.GiveAbility | 从类+配置创建技能实例 | `GiveAbility(AbilitySpec)` |
+
+**UE 不直接用 `new` 或手写工厂的原因**：
+- **反射 + GC**：UE 对象必须走自己的分配器才能被垃圾回收追踪
+- **蓝图可配置性**：`TSubclassOf` 让蓝图直接选类，C++ 不需为每个子类写 if-else
+- **CDO（原型模式）**：`GetDefaultObject<T>()` 从类获取默认实例，创建时直接复制
 
 </details>
