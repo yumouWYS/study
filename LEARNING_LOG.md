@@ -12,8 +12,7 @@
 - [2026-05-18](#ymrpg-2026-05-18) — HealthComponent 实现与编译错误排查、UGameFrameworkComponent 继承体系、BlueprintAssignable、mutable、UFUNCTION 元数据、FGameplayEffectSpec 与 GE 的关系、SetNumericAttributeBase、Component Tag 归属原则、生命/死亡系统完整链路
 - [2026-05-19](#ymrpg-2026-05-19) — AHUD 与 WBP/UUserWidget 架构关系、Sequence 流控制节点、统一事件源（GAS 事件总线 vs 观察者模式）、工厂模式在 UE/GAS 中的四层体现
 - [2026-05-20](#ymrpg-2026-05-20) — UMG 四层架构与 Slate 即时模式、UMG 核心类体系、UWidgetBlueprintGeneratedClass 动画查找与 `_INST` 后缀、BindWidget 元数据自动绑定、UI Tick 路径中的 FString→FText 字符串性能优化
-- [2026-05-21](#ymrpg-2026-05-21) — OnRep / RepNotify 回调链与 DOREPLIFETIME_CONDITION_NOTIFY、REPNOTIFY_Always 原因、服务端与客户端代码分布全景、连招系统外挂安全性分析、GA 同步内容 vs AttributeSet 同步内容、CanActivateAbility 双端执行与 PredictionKey 预测回滚、死亡全流程（5 类 2 通道 4 委托）、HandleGameplayEvent 事件驱动死亡、OnRep_DeathState 重放模式、Ragdoll 冲量计算、两个独立复制通道协同
-- [2026-05-22](#ymrpg-2026-05-22) — GA_Death 蓝图与 YMRPGGameplayAbility_Death 完整链路、ServerInitiated 策略、SurvivesDeath Tag 机制、FinishDeath 守卫 Bug、GameplayCue 子系统设计思想、GCN Burst vs BurstLatent 对比
+- [2026-05-21](#ymrpg-2026-05-21) — OnRep/RepNotify 回调链、REPNOTIFY_Always 原因、服务端/客户端代码分布全景、连招外挂安全性、GA 同步 vs AttributeSet 同步、CanActivateAbility 双端执行与 PredictionKey 回滚、死亡全流程（伤害致死→GameplayEvent→GA_Death→StartDeath→客户端重放→FinishDeath→销毁）、YMRPGGameplayAbility_Death C++ 基类、GA_Death 蓝图与 AutoRespawn、GameplayCue 子系统、GCN Burst vs BurstLatent、SurvivesDeath Tag
 
 ---
 
@@ -1814,13 +1813,6 @@ NotDead ──StartDeath()──→ DeathStarted ──FinishDeath()──→ De
 | 何时授予 | `BeginPlay` 循环 | `BeginPlay` 单独一行 |
 
 死亡技能的 `AbilityTriggers` 在 GA 蓝图 CDO 构造时配置。ASC 在 `GiveAbility` 时扫描 `AbilityTriggers` 数组，将 `GameplayEvent.Death` → SpecHandle 映射注册到 `GameplayEventTriggeredAbilities` map 中——后续 `HandleGameplayEvent` 直接从 map O(1) 查找。
-
-</details>
-
----
-
-<details>
-<summary><b>2026-05-22</b></summary>
 
 ### YMRPGGameplayAbility_Death — C++ 死亡技能基类
 
