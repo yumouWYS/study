@@ -106,6 +106,13 @@ void AYMRPGCharacterBase::BeginPlay()
 
 			AbilitiesToActive.Add(TmpAbilityPair.Key, AbilityHandle);
 		}
+
+		UYMRPGGameplayAbility* DeathAbilityCDO = DeathAbilityClass->GetDefaultObject<UYMRPGGameplayAbility>();
+		FGameplayAbilitySpec DeathAbilityCDOSpec(DeathAbilityCDO, 1);
+
+		DeathAbilityCDOSpec.SourceObject = this;
+
+		DeathAbilityHandle = AbilityComponent->GiveAbility(DeathAbilityCDOSpec);
 	}
 
 	HealthComponent->InitializeWithAbilitySystem(AbilityComponent);
@@ -113,7 +120,10 @@ void AYMRPGCharacterBase::BeginPlay()
 
 void AYMRPGCharacterBase::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
-
+	if (AbilityComponent && GetLocalRole() == ROLE_Authority)
+	{
+		AbilityComponent->ClearAllAbilities();
+	}
 	Super::EndPlay(EndPlayReason);
 }
 

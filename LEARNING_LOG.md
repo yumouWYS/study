@@ -11,7 +11,9 @@
 - [2026-05-16](#ymrpg-2026-05-16) — AttributeSet 编译错误排查、`override` 误用、`Lifetime` 大小写、Attribute 体系完整架构、DamageExecution 伤害计算管线、GA_Melee 蓝图节点图分析
 - [2026-05-18](#ymrpg-2026-05-18) — HealthComponent 实现与编译错误排查、UGameFrameworkComponent 继承体系、BlueprintAssignable、mutable、UFUNCTION 元数据、FGameplayEffectSpec 与 GE 的关系、SetNumericAttributeBase、Component Tag 归属原则、生命/死亡系统完整链路
 - [2026-05-19](#ymrpg-2026-05-19) — AHUD 与 WBP/UUserWidget 架构关系、Sequence 流控制节点、统一事件源（GAS 事件总线 vs 观察者模式）、工厂模式在 UE/GAS 中的四层体现
-- [2026-05-21](#ymrpg-2026-05-21) — UMG 四层架构与 Slate 即时模式、UMG 核心类体系、UWidgetBlueprintGeneratedClass 动画查找与 `_INST` 后缀、BindWidget 元数据自动绑定、UI Tick 路径中的 FString→FText 字符串性能优化
+- [2026-05-20](#ymrpg-2026-05-20) — UMG 四层架构与 Slate 即时模式、UMG 核心类体系、UWidgetBlueprintGeneratedClass 动画查找与 `_INST` 后缀、BindWidget 元数据自动绑定、UI Tick 路径中的 FString→FText 字符串性能优化
+- [2026-05-21](#ymrpg-2026-05-21) — OnRep / RepNotify 回调链与 DOREPLIFETIME_CONDITION_NOTIFY、REPNOTIFY_Always 原因、服务端与客户端代码分布全景、连招系统外挂安全性分析、GA 同步内容 vs AttributeSet 同步内容、CanActivateAbility 双端执行与 PredictionKey 预测回滚、死亡全流程（5 类 2 通道 4 委托）、HandleGameplayEvent 事件驱动死亡、OnRep_DeathState 重放模式、Ragdoll 冲量计算、两个独立复制通道协同
+- [2026-05-22](#ymrpg-2026-05-22) — GA_Death 蓝图与 YMRPGGameplayAbility_Death 完整链路、ServerInitiated 策略、SurvivesDeath Tag 机制、FinishDeath 守卫 Bug、GameplayCue 子系统设计思想、GCN Burst vs BurstLatent 对比
 
 ---
 
@@ -1298,7 +1300,7 @@ CDO（Class Default Object）在此充当**原型模式（Prototype）**角色�
 ---
 
 <details>
-<summary><b>2026-05-21</b></summary>
+<summary><b>2026-05-20</b></summary>
 
 ### UMG 四层架构与 Slate 即时模式
 
@@ -1437,5 +1439,546 @@ FText::AsNumber(HealthNum, FText::FTextAsNumberOptions()
 ```
 
 **改动落地**：`UI_CharacterInfo.cpp` 中 6 个控件的文本更新全部从 `FString::Printf + SanitizeFloat` 改为 `FText::Format + AsNumber`，Attack/Defense 单值直接 `FText::AsNumber`。每帧从约 18 次堆分配降到 FText 内部合理水平。
+
+</details>
+
+---
+
+<details>
+<summary><b>2026-05-21</b></summary>
+
+### OnRep / RepNotify 回调链与 DOREPLIFETIME_CONDITION_NOTIFY
+
+`OnRep_Health` 等 RepNotify 函数不是"属性变化时"调用的，而是**属性值通过网络复制到达客户端时**调用的。要让它生效，需要三条协同：
+
+```
+UPROPERTY(ReplicatedUsing = OnRep_Health)  ← 1. 声明"谁来处理复制回调"
+        +
+GetLifetimeReplicatedProps() 中的 DOREPLIFETIME_CONDITION_NOTIFY  ← 2. 注册属性到复制系统
+        =
+OnRep_Health 在客户端被自动触发  ← 3. 实际回调逻辑
+```
+
+**`DOREPLIFETIME_CONDITION_NOTIFY` 宏的三个参数含义**：
+
+| 参数 | 项目中的值 | 含义 |
+|------|-----------|------|
+| 条件 | `COND_None` | 无条件复制给所有客户端 |
+| RepNotify条件 | `REPNOTIFY_Always` | 每次收到复制数据都调 OnRep，不要求值必须变化 |
+
+**`REPNOTIFY_Always` vs 默认（`REPNOTIFY_OnChanged`）**：
+
+| 模式 | 触发条件 |
+|------|----------|
+| `REPNOTIFY_OnChanged` | 收到的值 ≠ 本地当前值，才调 OnRep |
+| `REPNOTIFY_Always` | 每次收到复制数据都调，即使值表面没变 |
+
+**GAS 必须用 Always 的原因**：`FGameplayAttributeData` 内部有 `CurrentValue` 和 `BaseValue` 两个字段。即使聚合后的 CurrentValue 没变，BaseValue 可能已经被修改（比如 Buff 过期）。而且 `GAMEPLAYATTRIBUTE_REPNOTIFY` 宏内部不单设值，还负责清理预测标记——如果跳过 OnRep 调用，预测状态会残留。
+
+### 项目服务端/客户端代码分布全景
+
+逐一排查后整理如下：
+
+**服务器专用代码**：
+
+| 位置 | 守卫方式 | 内容 |
+|------|----------|------|
+| `YMRPGDamageExecution.cpp` | `#if WITH_SERVER_CODE` | 整个 Execute_Implementation，伤害计算仅服务器执行 |
+| `YMRPGHealthComponent.cpp` | `#if WITH_SERVER_CODE` | HandleOutOfHealth 死亡触发（当前空占位） |
+| `YMRPGCharacterBase.cpp` | `GetLocalRole() == ROLE_Authority` | InitAbilityActorInfo + GiveAbility，技能授予必须权威侧 |
+| `YMRPGCharacterBase.cpp` | `GetLocalRole() == ROLE_Authority` | DetachFromControllerPendingDestroy + SetLifeSpan，Actor 生命周期终结 |
+
+**客户端专用代码（UI/渲染除外）**：
+
+| 位置 | 守卫方式 | 内容 |
+|------|----------|------|
+| `YMRPGCharacter.cpp` | `ROLE_AutonomousProxy` | ComboMelee 连招触发 |
+| `YMRPGGameplayAbility_Jump.cpp` | `IsLocallyControlled()` | Jump 开始/停止 |
+| `AnimNotifyState_IgnoreInput.cpp` | `NM_Client` + `ROLE_AutonomousProxy` | 技能动画期间禁用/恢复输入 |
+| `AnimNotifyState_NextCombo.cpp` | `!NM_DedicatedServer` | ResetPressed / ComboMelee，纯服务器跳过 |
+
+**中间地带 — 两边都跑的代码**：
+
+`PostGameplayEffectExecute`、`PreAttributeChange`、`ClampAttribute`、`OnRep_*` 系列没有端侧检查。GAS 内置机制保证正确性：服务器通过 GE 执行链处理，客户端通过属性复制 + OnRep 收到结果。
+
+**整体特征**：属于"GAS 框架驱动型"的服务器-客户端分离——GAS 框架承担绝大部分网络同步（属性复制、GE 复制、技能激活复制），自定义代码只需在三个边界上手动分流：**授权操作放服务器、输入操作放客户端、纯客户端动画通知跳过纯服务器**。
+
+### 连招系统外挂安全性分析
+
+**核心结论**：ComboComponent 本地化（`SetIsReplicated(false)`）不构成安全漏洞，真正的守门点是 GA 冷却 GE。
+
+**攻击链路**：
+
+```
+按键/外挂循环 → ActiveMelee() → AbilityInputTagPressed → InputPressedSpecHandles
+  → ProcessAbilityInput() → TryActivateAbility()
+    → CanActivateAbility() ← ★ 唯一守门点
+      检查: Cooldown GE + Cost GE + Tag 阻挡
+```
+
+无论从哪条路径触发（正常按键、ComboMelee、外挂直接调用 ActiveMelee），最终都汇入同一条路：`TryActivateAbility` → `CanActivateAbility`。
+
+- **有冷却 GE**：第一次激活通过，后续被冷却 Tag 阻挡，攻击无效
+- **无冷却 GE**：每次 TryActivateAbility 都能通过，受限于网络延迟（非本地每帧都能成功），但攻击频率可远超预期
+
+**ComboComponent 管"手感"不管"权限"**——它决定客户端侧的连招输入窗口，但服务端只认 GA 冷却 Tag。外挂能做的事：在合法边界内把时间利用精确到帧；外挂做不到的事：缩短冷却、跳过消耗检查、让服务器多算一次伤害。
+
+### GA 同步内容 vs AttributeSet 同步内容
+
+两者是**两条独立的复制通道**，各管各的，但最终效果一致：
+
+**通道 A — GA 状态复制**（`ReplicationPolicy = ReplicateYes`）：
+
+```
+服务器 GA 激活 → ServerTryActivateAbility()
+  ├─ 生成 PredictionKey ──复制──→ 客户端收到 Key，本地激活（预测）
+  ├─ 加 GameplayTag ──复制──→ 客户端收到 Tag 变更
+  ├─ 应用冷却 GE ──复制──→ 客户端收到 GE 效果
+  ├─ GA 结束 ──复制──→ 客户端收到结束事件
+  └─ InvokeReplicatedEvent(InputPressed/Released) ──RPC──→ 客户端
+```
+
+GA 复制的是**技能状态**：激活/结束事件、PredictionKey、ActivationInfo。不复制 GA 内部业务逻辑和中间状态变量。
+
+**通道 B — Attribute 属性复制**（`UPROPERTY(ReplicatedUsing = OnRep_Xxx)`）：
+
+```
+服务器 Health 变化 ──引擎原生属性复制──→ 客户端 OnRep_Health
+  → GAMEPLAYATTRIBUTE_REPNOTIFY → 通知 ASC 缓存更新
+  → OnHealthChanged.Broadcast(nullptr, nullptr, nullptr, ...)
+```
+
+AttributeSet 复制的是**数值结果**。GE 的中间计算过程不复制，只复制最终属性值。
+
+### CanActivateAbility 双端执行与 PredictionKey 预测回滚
+
+`CanActivateAbility()` 在**客户端和服务器都跑**，但作用完全不同：
+
+| | 客户端 | 服务器 |
+|------|--------|--------|
+| 作用 | 决定"是否预测执行" | 权威裁决 |
+| 失败后果 | 预测不发起，等服务器确认 | 拒绝激活，发回 PredictionKey 无效 |
+| 安全性 | 可被修改（二进制层面） | 不可绕过 |
+
+**客户端 CanActivateAbility 被修改后的回滚时序**：
+
+```
+T0: 客户端修改版 CanActivateAbility 返回 true（冷却未到）
+    → 本地开始播放攻击动画 ← 预测执行
+    → 发送激活请求带 PredictionKey#42
+
+T1: 服务器收到请求
+    → 权威 CanActivateAbility 返回 false（冷却 Tag 还在）
+    → 回复："PredictionKey#42 无效"
+
+T2: 客户端收到无效确认（约 +1 RTT，50-150ms）
+    → 引擎自动回滚：
+        ├─ 撤销被预测的 GE 效果
+        ├─ 撤销 Attribute 修改
+        ├─ 撤销 Tag 变更
+        ├─ 回退动画状态
+        └─ 调用 EndAbility(bWasCancelled=true)
+```
+
+**发现时间 = 一次 RTT**。回滚是引擎自动完成的，无需手写代码。`LocalPredicted` 策略自带完整的预测-确认-回滚流水线。
+
+### 死亡全流程
+
+从受伤扣血到 Actor 摧毁的完整调用链，涉及 5 个类、2 条网络复制通道、4 个委托。
+
+#### 委托绑定全景
+
+```
+CharacterBase 构造函数:
+├─ HealthComponent->OnDeathStarted.AddDynamic(this, &OnDeathStarted)
+└─ HealthComponent->OnDeathFinished.AddDynamic(this, &OnDeathFinished)
+
+HealthComponent::InitializeWithAbilitySystem (BeginPlay → ASC 就绪后):
+├─ HealthSet->OnHealthChanged.AddUObject(this, &HandleHealthChanged)
+├─ HealthSet->OnMaxHealthChanged.AddUObject(this, &HandleMaxHealthChanged)
+├─ HealthSet->OnOutOfHealth.AddUObject(this, &HandleOutOfHealth)        ← 死亡起点
+├─ HealthSet->OnManaChanged.AddUObject(this, &HandleManaChanged)
+└─ HealthSet->OnMaxManaChanged.AddUObject(this, &HandleMaxManaChanged)
+
+BP_YMRPGCharacterDefault EventGraph:
+└─ HealthComponent::OnDeathStarted → Widget隐藏 + 死亡动画 + Ragdoll
+```
+
+`OnOutOfHealth` 绑定到 `HandleOutOfHealth` 是死亡流程的**唯一入口**，`#if WITH_SERVER_CODE` 确保只在服务器触发。
+
+#### 阶段一：服务器 — 伤害致死
+
+```
+GE 应用
+  → DamageExecution::Execute_Implementation (仅服务器，捕获攻击力 → 写 Damage 元属性)
+  → PostGameplayEffectExecute(Data)
+      ├─ case Damage:
+      │    Health = Clamp(Health - Damage, 0, MaxHealth)
+      │    Damage = 0   // 消费元属性
+      ├─ if Health 变了:
+      │    OnHealthChanged.Broadcast(Instigator, Causer, &Spec, ...)
+      │    └─→ HandleHealthChanged → OnHealthChanged.Broadcast(HealthComponent, Old, New, Instigator)
+      │        └─→ UI(WBP_CharacterInfo) 更新血条
+      └─ if Health ≤ 0 && !bOutOfHealth:
+           OnOutOfHealth.Broadcast(Instigator, Causer, &Spec, ...)
+           └─→ HandleOutOfHealth  ★ 死亡唯一入口
+```
+
+`bOutOfHealth` 保证 `OnOutOfHealth` **只触发一次**——第二次伤害不会重复进入死亡流程。
+
+#### 阶段二：服务器 — GameplayEvent 分派（仅服务器）
+
+`HandleOutOfHealth` **不直接调用 `StartDeath()`**，而是通过 GAS 事件总线将控制权交给 GA_Death：
+
+```cpp
+#if WITH_SERVER_CODE
+Payload.EventTag = GameplayEvent.Death;
+Payload.Instigator = Instigator;          // 攻击者
+Payload.Target = ASC->GetAvatarActor();   // 死者
+Payload.OptionalObject = Spec->Def;       // GE 资产
+Payload.ContextHandle = Spec->GetEffectContext();
+Payload.InstigatorTags = *Spec->CapturedSourceTags.GetAggregatedTags();
+Payload.TargetTags = *Spec->CapturedTargetTags.GetAggregatedTags();
+Payload.EventMagnitude = DamageMagnitude;
+
+FScopedPredictionWindow NewScopedWindow(ASC, true);
+ASC->HandleGameplayEvent(GameplayEvent.Death, &Payload);
+#endif
+```
+
+**`HandleGameplayEvent` 引擎侧逻辑**：从 `GameplayEventTriggeredAbilities` map 查找 `GameplayEvent.Death` 对应的 SpecHandle → `TriggerAbilityFromGameplayEvent` → `TryActivateAbility(DeathAbilityHandle)`。同时遍历 Tag 层级链（`GameplayEvent.Death` → `GameplayEvent` → 根 Tag）逐一匹配。
+
+**为什么只发事件不直接调 StartDeath**：死亡演出（动画、Ragdoll、延迟、特效）是蓝图设计师的领域，C++ 只需分发事件。GA_Death 可以做任意复杂的死亡演出序列，C++ 层不关心具体流程。
+
+#### 阶段三：GA_Death 激活 → StartDeath
+
+`GA_Death` 在 `CharacterBase::BeginPlay` 中授予（`ROLE_Authority`）：
+
+```cpp
+UYMRPGGameplayAbility* DeathAbilityCDO = DeathAbilityClass->GetDefaultObject<>();
+FGameplayAbilitySpec DeathAbilityCDOSpec(DeathAbilityCDO, 1);
+DeathAbilityCDOSpec.SourceObject = this;
+DeathAbilityHandle = AbilityComponent->GiveAbility(DeathAbilityCDOSpec);
+```
+
+GA_Death 蓝图在 `ActivateAbility` 中调用 `HealthComponent::StartDeath()`。
+
+**StartDeath 状态机**：
+
+```
+StartDeath():
+  守卫: DeathState != NotDead → return  // 不可重复进入
+  ├─ DeathState = DeathStarted      ← UPROPERTY(Replicated) 复制
+  ├─ ASC->SetLooseGameplayTagCount(Status.Death.Dying, 1)  ← Tag 复制
+  ├─ OnDeathStarted.Broadcast(Owner)
+  │    ├─→ CharacterBase::OnDeathStarted
+  │    │     └─ DisableMovementAndCollision()
+  │    │          禁用移动输入 | Capsule 碰撞全关 | Movement 停止并禁用
+  │    └─→ BP 事件图:
+  │         Widget->SetVisibility(false)              // 隐藏血条
+  │         PlayAnimMontage(DeathAnimMontage)         // 死亡动画
+  │         AIPerception->UnregisterFromSense(Sight)  // 尸体不被AI看到
+  │         Delay(RandomFloat 0.2~0.8)                // 随机延迟破整齐感
+  │         Ragdoll()                                  // 物理模拟
+  └─ Owner->ForceNetUpdate()  ← 不等正常复制周期，立即刷新
+```
+
+**Ragdoll 自定义函数**：
+
+```
+Ragdoll():
+  ├─ Velocity = CharacterMovement->GetLastUpdateVelocity()   // 死前最后速度
+  ├─ Mesh->SetCollisionProfileName("Ragdoll")                // 碰撞预设切换
+  ├─ Mesh->SetAllBodiesBelowSimulatePhysics(BoneName, true)  // 从指定骨骼往下模拟
+  ├─ 冲量计算:
+  │    NormalizedDir = Normal(Velocity)                       // 方向归一化
+  │    ScaledDir = NormalizedDir × RagdollImpulseStrength    // 方向 × 可调力度
+  │    FinalImpulse = Velocity + ScaledDir                    // 继承速度 + 方向冲量
+  └─ Mesh->AddImpulse(FinalImpulse, BoneName, bVelChange=true)
+       // bVelChange=true: 忽略质量，按速度变化而非动量施加
+```
+
+冲量 = 死亡前移动速度 + 移动方向 × 力度系数。角色跑动中被打死会向前飞扑，原地死亡不会飞出去——比写死固定方向自然得多。
+
+#### 阶段四：客户端复制 — OnRep_DeathState 重放模式
+
+当服务器设置 `DeathState = DeathStarted`，`DOREPLIFETIME(UYMRPGHealthComponent, DeathState)` 自动复制：
+
+```cpp
+void OnRep_DeathState(EYMRPGDeathState OldValue)
+{
+    const EYMRPGDeathState NewValue = DeathState;  // 快照
+    DeathState = OldValue;                          // 先恢复旧值
+
+    if (OldValue > NewValue)  // 死亡状态只能递增，回退必为异常
+        { error; return; }
+
+    if (OldValue == NotDead)
+    {
+        if (NewValue == DeathStarted)
+            StartDeath();              // ★ 重放！
+        else if(NewValue == DeathFinished)
+            StartDeath(); FinishDeath();  // 衔接被跳过的中间状态
+    }
+    else if (OldValue == DeathStarted && NewValue == DeathFinished)
+    {
+        FinishDeath();                 // ★ 重放！
+    }
+}
+```
+
+**重放模式的设计意图**：客户端不直接 `DeathState = NewValue` 然后搞一套"客户端专用行为"，而是恢复旧值后调用 `StartDeath()/FinishDeath()`。**服务器和客户端走完全相同的函数路径**——Tag 变更、委托广播、ForceNetUpdate 全部一致，消除端侧代码差异。
+
+**`if (OldValue > NewValue)` 守卫**依赖枚举值的递增定义：`NotDead=0 < DeathStarted=1 < DeathFinished=2`。收到倒退的复制值（乱序包、预测错误）直接打 Error 日志并 return。
+
+#### 阶段五：FinishDeath — 死亡收尾
+
+GA_Death 的死亡演出结束后，调用 `FinishDeath()`：
+
+```
+FinishDeath():
+  守卫: DeathState != DeathStarted → return
+  ├─ DeathState = DeathFinished
+  ├─ ASC->SetLooseGameplayTagCount(Status.Death.Dying, 0)   // 移除濒死
+  ├─ ASC->SetLooseGameplayTagCount(Status.Death.Dead, 1)    // 标记已死
+  ├─ OnDeathFinished.Broadcast(Owner)
+  │    └─→ CharacterBase::OnDeathFinished
+  │         └─ SetTimerForNextTick → DestoryDueToDeath()
+  │              ├─ K2_OnDeathFinished()  ← BlueprintImplementableEvent 蓝图钩子
+  │              └─ UninitAndDestory()
+  └─ Owner->ForceNetUpdate()
+
+UninitAndDestory():
+  ├─ if ROLE_Authority:
+  │    DetachFromControllerPendingDestroy()
+  │    SetLifeSpan(0.1f)                     // 0.1秒后引擎自动销毁
+  ├─ HealthComponent->UninitializeFromAbilitySystem()
+  │    清空 ASC Tag + 解除所有 AttributeSet 委托绑定  // ★ 防止悬空指针
+  └─ SetActorHiddenInGame(true)  // 隐藏（Ragdoll 尸体已替代显示）
+```
+
+客户端收到 `DeathState = DeathFinished` → `OnRep_DeathState` 重放 → `FinishDeath()` → 同样走 `UninitAndDestory()`（但 `SetLifeSpan` 不执行）。
+
+**`UninitializeFromAbilitySystem` 的必要性**：不及时解绑会导致 Actor 销毁后 AttributeSet 仍持有 HealthComponent 悬空指针，下一次属性变化时 Use-After-Free 崩溃。
+
+#### 完整端侧对比
+
+| | 服务器 | 客户端 |
+|---|---|---|
+| **PostGameplayEffectExecute** | 直接执行，Broadcast 带 Instigator/Causer | 不走 |
+| **HandleOutOfHealth** | 执行 — 发 GameplayEvent.Death | `#if WITH_SERVER_CODE` 整段编译排除 |
+| **GA_Death 激活** | HandleGameplayEvent → TriggerAbilityFromGameplayEvent | 不激活（GameplayEvent 不跨网络） |
+| **StartDeath / FinishDeath** | GA_Death 直接调用 | OnRep_DeathState 重放间接调用 |
+| **OnRep_DeathState** | 不触发（权威端不执行 RepNotify） | 恢复旧值 → 调用 StartDeath/FinishDeath |
+| **DisableMovementAndCollision** | OnDeathStarted 回调 | 重放 → 同样回调 |
+| **BP 事件图(动画/Ragdoll)** | OnDeathStarted 回调 | 重放 → 同样回调 |
+| **SetLifeSpan(0.1f)** | 执行 | 不执行 (`ROLE_Authority` 守卫) |
+| **EndPlay → ClearAllAbilities** | 执行 | 不执行 |
+
+#### 死亡状态机与 Tag 映射
+
+```
+NotDead ──StartDeath()──→ DeathStarted ──FinishDeath()──→ DeathFinished
+  ↑                           │
+  └────── 不可逆，单调递增 ───┘
+
+| 状态 | Status.Death.Dying | Status.Death.Dead |
+|------|--------------------|--------------------|
+| NotDead | 0 | 0 |
+| DeathStarted | 1 | 0 |
+| DeathFinished | 0 | 1 |
+```
+
+#### 两个独立复制通道的协同
+
+```
+通道 A — DeathState 直接复制:
+  Server: StartDeath() → DeathState = DeathStarted ──复制──→ Client: OnRep_DeathState
+    → 恢复 → 重放 StartDeath() → Tag + Event 以相同顺序执行
+
+通道 B — AttributeSet 属性复制:
+  Server: OnOutOfHealth.Broadcast(...) → [Client: OnRep_Health]
+    → OnHealthChanged.Broadcast(nullptr, nullptr, nullptr, ...)
+    → 客户端侧的 OnHealthChanged 触发（无施法者信息）
+```
+
+**两条通道互不依赖，独立收敛**。客户端不通过属性变化触发死亡（`HandleOutOfHealth` 有 `WITH_SERVER_CODE` 守卫），死亡状态完全由通道 A（`OnRep_DeathState` 重放）驱动。这避免了因两条通道复制到达顺序不确定而重复触发死亡流程。
+
+#### 死亡技能授予的特殊性
+
+| | 普通技能 | 死亡技能 |
+|---|---|---|
+| 来源 | `AbilitiesToAdd` TMap | `DeathAbilityClass` 单类 |
+| 触发方式 | `AbilityInputTagPressed` → `ProcessAbilityInput` | `HandleGameplayEvent` → `AbilityTriggers` |
+| 输入绑定 | `DynamicAbilityTags.AddTag(InputTag)` | 无输入绑定，纯事件驱动 |
+| 何时授予 | `BeginPlay` 循环 | `BeginPlay` 单独一行 |
+
+死亡技能的 `AbilityTriggers` 在 GA 蓝图 CDO 构造时配置。ASC 在 `GiveAbility` 时扫描 `AbilityTriggers` 数组，将 `GameplayEvent.Death` → SpecHandle 映射注册到 `GameplayEventTriggeredAbilities` map 中——后续 `HandleGameplayEvent` 直接从 map O(1) 查找。
+
+</details>
+
+---
+
+<details>
+<summary><b>2026-05-22</b></summary>
+
+### YMRPGGameplayAbility_Death — C++ 死亡技能基类
+
+GA_Death 蓝图继承自 C++ 类 `UYMRPGGameplayAbility_Death`，后者封装了死亡流程的核心调度逻辑。
+
+**构造函数**：
+
+```cpp
+NetExecutionPolicy = ServerInitiated;       // 服务器先执行，不需要客户端预测
+bAutoStartDeath = true;                    // 默认自动进入死亡状态
+
+// CDO 注册 GameplayEvent.Death 触发器
+AbilityTriggers.Add({GameplayEvent.Death, GameplayEvent});
+```
+
+`ServerInitiated` 而非 `LocalPredicted`——死亡不需要零延迟手感，客户端等服务器确认再表现即可。
+
+**ActivateAbility — 激活入口（服务器）**：
+
+```
+ActivateAbility()
+  ├─1. CancelAbilities(nullptr, &Ignore_SurvivesDeath, this)
+  │    遍历所有活跃技能，取消它们——但保留标记了 Ability.Behavior.SurvivesDeath 的
+  │    （死亡时仍然生效的被动技能不会被打断）
+  │
+  ├─2. SetCanBeCanceled(false)
+  │    死亡技能不可被外部打断，一旦开始必须跑到 EndAbility
+  │
+  ├─3. if bAutoStartDeath → StartDeath()
+  │    调用 HealthComponent::StartDeath()——DeathState 推进 + Tag + OnDeathStarted
+  │
+  └─4. Super::ActivateAbility(...)
+       触发蓝图侧 K2_ActivateAbilityFromEvent → GameplayCue + AutoRespawn + WaitDelay
+```
+
+**EndAbility — 结束时（服务器）**：
+
+```
+EndAbility()
+  ├─ FinishDeath() → HealthComponent::FinishDeath()
+  └─ Super::EndAbility(...)
+```
+
+`FinishDeath()` 不在 WaitDelay 的蓝图出口处调用，而是在 C++ 层 `EndAbility()` 的入口处——意味着只要 GA 结束（无论蓝图如何结束、是否取消），`FinishDeath` 都会被调用。这是一种防御性设计。
+
+**GA_Death 的 StartDeath / FinishDeath 包装**：
+
+```cpp
+void StartDeath()
+{
+    if (HealthComponent->GetDeathState() == NotDead)
+        HealthComponent->StartDeath();
+}
+
+void FinishDeath()
+{
+    if (HealthComponent->GetDeathState() == NotDead)  // ← Bug
+        HealthComponent->FinishDeath();
+}
+```
+
+**`FinishDeath()` 中存在一个守卫条件 Bug**：检查的是 `NotDead`，但此时 `StartDeath()` 已经将状态推进到 `DeathStarted`，所以永远进不去。应该改为 `DeathStarted`。
+
+不过实际可能未触发问题——`bAutoStartDeath` 为 false 的蓝图子类可能从未调用 `StartDeath()`，此时状态仍是 `NotDead`，需要 `FinishDeath()` 也能处理"从未开始就直接结束"的情况。但 `HealthComponent::FinishDeath()` 内部守卫又要求 `DeathStarted`，所以同样无法执行。正确做法应去掉 GA 层的 guards，让 HealthComponent 自身的状态机 guards 统一把关。
+
+### GA_Death 蓝图节点图
+
+GA_Death 蓝图做了两件事：**死亡演出**和**自动重生**。
+
+#### 主线
+
+```
+K2_ActivateAbilityFromEvent (事件输入入口，输出 EventData 引用)
+  ├─ Break GameplayEventData (拆出 Target / Instigator / EventMagnitude / ContextHandle 等)
+  ├─ 存入 Target 成员变量 (供后续 AutoRespawn 使用)
+  ├─ MakeGameplayCueParameters (Payload 字段全部映射到 Cue 参数)
+  ├─ K2_ExecuteGameplayCueWithParams(GameplayCue.Character.Death)
+  │    触发死亡 VFX / SFX / Death Camera Mode
+  │    引擎自动复制到所有客户端
+  ├─ SetTimerDelegate(AutoRespawn, Time=1.5s, bLooping=false)
+  │    1.5 秒后开始重生流程（不等待尸体消失）
+  └─ AbilityTask_WaitDelay(Time=DeathTime)
+       DeathTime 秒后 → OnFinish → K2_EndAbility → C++ EndAbility → FinishDeath
+```
+
+#### AutoRespawn 自定义事件（Timer 触发）
+
+```
+AutoRespawn (1.5s 后)
+  ├─ Cast Target → YMRPGCharacterBase
+  ├─ IsValid GameMode → Cast Controller → YMRPGPlayerController
+  ├─ UnPossess()                        // 控制器放弃旧尸体
+  ├─ SetOwner(尸体, PlayerState)        // 尸体归属 PlayerState，Controller 可接管新 Pawn
+  └─ GameMode::RestartPlayer(Controller) // → SpawnDefaultPawn + Possess 新角色
+```
+
+**两条时间线**：
+
+```
+T=0      GA_Death 激活
+         ├─ StartDeath() → DeathStarted + 广播
+         ├─ GameplayCue.Character.Death（视觉/音效/镜头）
+         ├─ SetTimer(AutoRespawn, 1.5s)
+         └─ WaitDelay(DeathTime)
+
+T=1.5s   AutoRespawn → 新角色出生（尸体 Rudoll 还在时就可以操控新角色）
+T=DeathTime  WaitDelay 结束 → EndAbility → FinishDeath → 旧尸体销毁
+```
+
+`DeathTime`（蓝图变量）控制尸体保留时长，1.5s 控制重生等待。
+
+### GameplayCue — 表现层子系统
+
+核心设计思想：**把"发生了什么"（逻辑）和"看起来/听起来怎么样"（表现）解耦**。
+
+```
+GA/GE 侧：                     GameplayCue 侧：
+"施加了伤害"  ──Tag──→   命中血液粒子 + 音效 + 受击动画
+"角色死亡"    ──Tag──→   死亡特效 + 死亡镜头模式 + 死亡音效
+```
+
+**工作流程**：
+
+1. `K2_ExecuteGameplayCueWithParams(GameplayCueTag, Parameters)` 在服务器调用
+2. `UGameplayCueManager` 查找注册了该 Tag 的所有 `GameplayCueNotify`
+3. 服务器本地播放 + **自动 RPC 推送到所有相关客户端**
+4. 不需要手写任何网络同步代码
+
+**Parameters 携带的上下文信息**（继承自 `HandleOutOfHealth` 的 Payload）：`Instigator`（攻击者）、`NormalizedMagnitude` / `RawMagnitude`（伤害量）、`EffectContext`（GE 上下文）、`SourceObject`（GE Asset Def）、`MatchedTagName`（`GameplayEvent.Death`）。
+
+### GCN Burst vs BurstLatent
+
+| | UGameplayCueNotify_Burst | AGameplayCueNotify_BurstLatent |
+|---|---|---|
+| 继承链 | `GameplayCueNotify_Static` (UObject) | `GameplayCueNotify_Actor` (AActor) |
+| 实例化 | 不实例化，直接调 CDO 函数 | 生成 Actor 实例到世界 |
+| Latent 节点 | **不能**用 Delay / Timeline | **可以**用 Delay / Timeline |
+| OnBurst | `const` 函数 | 非 const，可修改自身状态 + 持有 `BurstSpawnResults` |
+| 生命周期 | 一帧调用即结束 | 生成 → OnExecute → OnBurst → 蓝图跑完 → `Recycle()` 回收 |
+
+**本质原因**：Timeline / Delay 需要附着在一个可 Tick 的对象上。CDO 是全局唯一的静态对象，不能 Tick。BurstLatent 生成临时 Actor，这个 Actor 是 Latent 节点的"容器"。
+
+**场景选择**：命中粒子（一帧完成）→ Burst。死亡镜头需 Timeline 平滑过渡 → BurstLatent。受击屏幕闪红持续 0.5s → BurstLatent。
+
+项目中 `GameplayCue.Character.Death` 的注释标注了 "Death Camera Mode"——如果镜头切换用 Timeline，就应该用 BurstLatent。
+
+### SurvivesDeath Tag 机制
+
+`Ability.Behavior.SurvivesDeath` 是一个特殊的 GameplayTag，标记那些死亡时不应该被取消的技能。在 `ActivateAbility` 的第一步：
+
+```cpp
+FGameplayTagContainer AbilityTypesToIgnore;
+AbilityTypesToIgnore.AddTag(Ability_Behavior_SurvivesDeath);
+ASC->CancelAbilities(nullptr, &AbilityTypesToIgnore, this);
+```
+
+`CancelAbilities(nullptr, &IgnoreTags, this)` 的含义：取消所有活跃技能（`WithTags=nullptr` 匹配全部），但跳过那些带有 `SurvivesDeath` Tag 的技能（`WithoutTags` 除外）。`Ignore=this` 不取消自己。
+
+这是一种**声明式生存策略**——不是硬编码"死亡时保留哪些技能"，而是在 GA 蓝图上打一个 Tag 即可，C++ 完全不需要知道具体哪些技能要保留。
 
 </details>

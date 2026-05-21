@@ -243,18 +243,6 @@ void UYMRPGHealthComponent::OnRep_DeathState(EYMRPGDeathState OldValue)
 	ensureMsgf(DeathState == NewValue, TEXT("YMRPGHealthComponent: Death state [%d] -> [%d] for owner [%s] did not match expected value after prediction."), (uint8)OldValue, (uint8)NewValue, *GetNameSafe(GetOwner()));
 }
 
-/*
-DECLARE_MULTICAST_DELEGATE_SixParams(
-FYMRPGAttributeEvent,
-AActor* /*EffectInstigator,
-AActor* /*EffectCauser,
-	const FGameplayEffectSpec* /*EffectSpec,
-	float /*EffectMagnitude,
-	float /*OldValue,
-	float /*NewValue
-	);
-*/
-
 void UYMRPGHealthComponent::HandleHealthChanged(
 	AActor* Instigator,
 	AActor* Causer,
@@ -289,10 +277,33 @@ void UYMRPGHealthComponent::HandleOutOfHealth(
 )
 {
 #if WITH_SERVER_CODE
-	if (DeathState == EYMRPGDeathState::NotDead)
+
+
+	if (AbilitySystemComponent && Spec)
 	{
-		StartDeath();
+		// Send the "GameplayEvent.Death" event to the owning player's ability system.
+		{
+			FGameplayEventData Payload;
+
+			Payload.EventTag = YMRPGGameplayTags::GameplayEvent_Death;
+            Payload.Instigator = Instigator;
+            Payload.Target = AbilitySystemComponent->GetAvatarActor();
+			Payload.OptionalObject = Spec->Def;
+            Payload.ContextHandle = Spec->GetEffectContext();
+			Payload.InstigatorTags = *Spec->CapturedSourceTags.GetAggregatedTags();
+			Payload.TargetTags = *Spec->CapturedTargetTags.GetAggregatedTags();
+			Payload.EventMagnitude = DamageMagnitude;
+
+			FScopedPredictionWindow NewScopedWindow(AbilitySystemComponent, true);
+			AbilitySystemComponent->HandleGameplayEvent(Payload.EventTag, &Payload);
+
+
+		}
+
+
 	}
+
+
 #endif  // WITH_SERVER_CODE
 }
 

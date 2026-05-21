@@ -86,6 +86,11 @@ protected:
 
 	TMap<FGameplayTag, FGameplayAbilitySpecHandle> AbilitiesToActive;
 
+	UPROPERTY(BlueprintReadWrite, EditDefaultsOnly, Category = "YMRPG|Ability", meta = (AllowPrivateAccess = "true"))
+    TSubclassOf<UYMRPGGameplayAbility> DeathAbilityClass;
+
+	FGameplayAbilitySpecHandle DeathAbilityHandle;
+
 protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "YMRPG|GAS", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UYMRPGAbilitySystemComponent> AbilityComponent;
