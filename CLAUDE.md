@@ -17,7 +17,7 @@
 - **引擎**：UE 5.6
 - **IDE**：Visual Studio（通过 .sln 打开）
 - **版本控制**：Git + LFS（大文件由 .gitattributes 管理）
-- **学习日志**：`LEARNING_LOG.md` 记录每日有技术价值的提问与知识点，按日期归档
+- **学习日志**：`learning_log/LEARNING_LOG_{月份}.md` 按月归档，记录每日有技术价值的提问与知识点
 
 ## 交流
 

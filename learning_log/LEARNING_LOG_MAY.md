@@ -13,6 +13,8 @@
 - [2026-05-19](#ymrpg-2026-05-19) — AHUD 与 WBP/UUserWidget 架构关系、Sequence 流控制节点、统一事件源（GAS 事件总线 vs 观察者模式）、工厂模式在 UE/GAS 中的四层体现
 - [2026-05-20](#ymrpg-2026-05-20) — UMG 四层架构与 Slate 即时模式、UMG 核心类体系、UWidgetBlueprintGeneratedClass 动画查找与 `_INST` 后缀、BindWidget 元数据自动绑定、UI Tick 路径中的 FString→FText 字符串性能优化
 - [2026-05-21](#ymrpg-2026-05-21) — OnRep/RepNotify 回调链、REPNOTIFY_Always 原因、服务端/客户端代码分布全景、连招外挂安全性、GA 同步 vs AttributeSet 同步、CanActivateAbility 双端执行与 PredictionKey 回滚、死亡全流程（伤害致死→GameplayEvent→GA_Death→StartDeath→客户端重放→FinishDeath→销毁）、YMRPGGameplayAbility_Death C++ 基类、GA_Death 蓝图与 AutoRespawn、GameplayCue 子系统、GCN Burst vs BurstLatent、SurvivesDeath Tag
+- [2026-05-24](#ymrpg-2026-05-24) — GAS 引擎源码蒸馏项目：Skill 架构设计（单入口 + 多 reference）、子系统拆分粒度、双层知识模型（现有 Skill"怎么做" vs 蒸馏 Skill"为什么这样做"）、4 步制作流程（测绘→深读→合成→验证）、7 章模板确立
+- [2026-05-26](#ymrpg-2026-05-26) — PlayerController 服务器/客户端分布、GameplayEffectContext 传递 HitResult（蓝图 Context 引脚悬空排错）、UPROPERTY Category 语法与 = 运算符、UWidgetComponent 继承链详解、InitialLifeSpan 原理与不生效条件、UE 编译流程（UBT/UHT/MSBuild）
 
 ---
 
@@ -1972,5 +1974,188 @@ ASC->CancelAbilities(nullptr, &AbilityTypesToIgnore, this);
 `CancelAbilities(nullptr, &IgnoreTags, this)` 的含义：取消所有活跃技能（`WithTags=nullptr` 匹配全部），但跳过那些带有 `SurvivesDeath` Tag 的技能（`WithoutTags` 除外）。`Ignore=this` 不取消自己。
 
 这是一种**声明式生存策略**——不是硬编码"死亡时保留哪些技能"，而是在 GA 蓝图上打一个 Tag 即可，C++ 完全不需要知道具体哪些技能要保留。
+
+</details>
+
+## 2026-05-24 — GAS 引擎源码蒸馏项目
+
+### 蒸馏的动机与定位
+
+已有的 10 个 UE5 Skill 解决"怎么写"（规范/模式/约束），缺乏"引擎为什么这样工作"的源码级理解。蒸馏 Skill 补足这个盲区——从源码提取实现细节、惯用法、工程权衡、常见陷阱。
+
+核心方法论：
+- **蒸馏 ≠ 文档翻译**。不记录 API 签名、用法示例等已知信息，只记录看源码才能发现的东西。
+- **每个断言有源文件行号**。不是"文档说 XYZ"，而是 `GameplayEffect.cpp:3989` 处的代码行为。
+- **与现有 Skill 互补**。现有 Skill 管"正确"，蒸馏 Skill 管"理解"。
+
+### Skill 架构设计
+
+```
+ue5-source-distill/
+├── SKILL.md              ← 单入口路由（关键词→文档映射表 + 7 章模板）
+├── references/           ← 7 份子系统蒸馏（按需加载，非全量）
+│   ├── gameplay-tags.md  P0
+│   ├── asc.md            P1
+│   ├── gameplay-ability.md P2
+│   ├── gameplay-effect.md P3
+│   ├── attribute-set.md  P4
+│   ├── gameplay-cue.md   P5
+│   └── gameplay-prediction.md P6
+└── meta/                 ← 过程记录
+    ├── methodology.md
+    ├── source-map.md
+    ├── design-log.md
+    └── changelog.md
+```
+
+关键决策：
+1. **一个 Skill + N 个 reference**，而非 N 个独立 Skill（避免路由冲突，便于交叉引用）
+2. **按子系统拆分**，而非整个 GAS 一个文档（上下文装不下，无关内容浪费）
+3. **网络章节引用标注**，而非内嵌引擎级网络原理（GAS 网络行为依赖引擎网络栈，应独立学习后回填）
+4. **用户级 Skill**，而非项目级（蒸馏绑定本机引擎源码路径）
+
+### 4 步制作流程
+
+**步骤 1：测绘** — 标记"已知信息"边界，确定需要深读的源文件列表
+
+**步骤 2：源码深读** — 读头文件建立类关系全景 → 读实现文件追踪内部逻辑 → 标记隐藏检查/非明显行为/设计模式/易错点
+
+**步骤 3：合成** — 按 7 章模板组织信息，删除与已知信息重复的内容
+
+**步骤 4：验证** — 每个断言在源码中找到对应行号确认，对照学习日志检查覆盖度
+
+### 7 章模板
+
+1. **架构概览** — 类关系、关键数据结构区别、对象生命周期
+2. **关键实现细节** — 执行顺序、隐藏检查、缓存策略、同类函数行为差异
+3. **Epic 惯用法** — UE 特有设计模式、可复用写法
+4. **工程权衡** — 多种方案适用场景、选择动机
+5. **常见陷阱** — 引擎内部机制导致的 bug、隐含约束
+6. **网络复制行为** — GAS 层网络行为描述，引擎级原理引用标注 → Networking Skill
+
+### 各子系统核心发现
+
+| 子系统 | 最关键的"非文档化"知识点 |
+|--------|------------------------|
+| GameplayTags | `ParentTags` 故意允许重复（空间换时间）；`FQueryEvaluator` 字节码短路求值通过 `bSkip` 传播；重定向链展平 10 跳限制；`NetSerialize` 使用一位门控仅回送原始客户端 |
+| ASC | 三层激活调用链（`TryActivateAbility`→`InternalTryActivateAbility`→`InternalServerTryActivateAbility`）；`ABILITYLIST_SCOPE_LOCK` 延迟变更到 `AbilityPendingAdds/Removes`；`OnRep_SpawnedAttributes` 聚合器迁移（保留旧 FAggregator 重新绑定到新 AttributeSet 实例）；7 种复制条件 |
+| GameplayEffect | CDO→Spec→Active 三层数据模型；`EvaluateWithBase` 偏置累加公式 `((B+A)*M/D*C)+F`；`ComputeStackedModifierMagnitude` 偏置机制（`(Mag-Bias)*Stack+Bias`）；Instant 预测暂存为 Infinite Duration；免疫系统通过 `GameplayEffectApplicationQueries` 注册 |
+| GameplayAbility | `DoesAbilitySatisfyTagRequirements` 使用两个 lambda 执行 7 层检查；`CommitAbility` 原子消耗（CommitCheck→CommitExecute→K2_CommitExecute→NotifyAbilityCommit）；`EndAbility` 17 步清理；冷却通过 GE 授予标签而非原生计时器 |
+| AttributeSet | Current/Base 双值分离的网络动机（Base 直接复制，Current = Base + Aggregator Evaluate）；`SetBaseAttributeValueFromReplication` 先回退到旧值→Evaluate 旧值→设置新值→OnDirty 的四步序列；`PreGameplayEffectExecute` 仅在 Instant GE 执行时触发，不在 Duration GE Aggregator 评估时触发 |
+| GameplayCue | Global CueSet + Actor Interface 双重路由；`HandleGameplayCueNotify_Internal` 标签继承递归回退；`AGameplayCueNotify_Actor` 堆叠检查（`GameplayCueNotifyTagCheckOnRemove` 检查目标是否仍有匹配标签）；Actor 池化（`NumPreallocatedInstances` + `Recycle`） |
+| GameplayPrediction | `FPredictionKey::NetSerialize` 位门控 + `PredictiveConnectionObjectKey` 仅回送原始客户端；`FReplicatedPredictionKeyMap` 环形缓冲区 + `OnRep` 驱动 `CatchUpTo` 级联；`FScopedPredictionWindow` RAII 作用域；Instant GE 预测暂存为 Infinite + `NewRejectOrCaughtUpDelegate` 清除 |
+
+### 验证流程与标准
+
+P0 做了完整逐断言验证。P1-P6 验证程度不一致（部分断言依赖探索代理报告）。P2-P5 后续补充验证中，发现并修正 P4 `SetBaseAttributeValueFromReplication` 描述（从"直接设置+重新 Evaluate"修正为四步序列）。
+
+后续所有蒸馏遵循：**每个断言必须经过直接源码阅读验证，不能仅依赖代理报告**。
+
+### 网络同步的阶段规划
+
+网络同步不是 GAS 的附属，而是独立学科。原学习路径 `GAS → AI → UI → 网络同步` 正确——引擎网络栈（`UNetDriver`、`FObjectReplicator`、`FRepLayout`）远超 GAS。GAS 蒸馏文档中网络章节仅写 GAS 层行为，引擎级原理引用标注，留待第五阶段 `ue5-networking-distill` 独立完成后再回填。
+
+为避免重复知识组织，网络同步的关键概念梳理如下：
+
+**预测系统的本质**：客户端预测是为解决"网络延迟导致的手感延迟"。模型为：客户端先执行，服务器验证后确认/拒绝。能力通过 `ServerTryActivateAbility` RPC 发送预测键，效果层面 Instant GE 被暂存为 Infinite Duration 等待服务器。`FPredictionKey::NetSerialize` 通过一位门控和 `PredictiveConnectionObjectKey` 确保键仅回送给原始预测客户端，防止预测副作用泄漏。
+
+**RPC 系统的可靠性策略**：`Server`/`Client` 前缀 = 可靠 RPC（保证送达和顺序），`NetMulticast` = 不可靠（不保证送达）。GameplayCue 全部使用不可靠 NetMulticast。能力激活/结束/失败使用可靠 RPC。
+
+**GAS 属性复制的三条通路**：（1）`FGameplayAttributeData` 的 `ReplicatedUsing=OnRep` 直接复制 BaseValue；（2）`FActiveGameplayEffectsContainer`（FastArray）增量复制 Modifier 列表；（3）`SpawnedAttributes` 数组复制属性集实例。
+
+**复制模式的工程权衡**：`Full` 全量复制（小规模、所有玩家需要看到所有效果），`Mixed`（Owner 全量 + Simulated 仅标签，标准多人默认），`Minimal`（仅标签，大规模多人）。`ReplicatedPredictionKeyMap` 必须最后复制（`COND_OwnerOnly`），因为其 OnRep 中的 CatchUpTo 需要在所有其他属性的 OnRep 之后运行。
+
+**引擎级概念（留待 Network Skill 深挖）**：`FRepLayout` 属性序列化与变更检测、`FObjectReplicator` 子对象复制管线、`FFastArraySerializer::NetDeltaSerialize` 增量序列化算法、`UNetDriver::ProcessRemoteFunction` RPC 调用链、`COND_Dynamic` 动态条件复制决策机制、Iris `FNetToken` 复制系统。目前阶段理解其行为层面即可，引擎实现细节在网络阶段专门学习。
+</details>
+
+---
+
+## 2026-05-26
+
+### PlayerController 服务器/客户端分布与差异
+
+PlayerController **服务器和客户端都有**，但存在范围和权限完全不同。
+
+**存在范围**：
+- 服务器：持有**所有玩家**的 PC，`GetLocalRole() == ROLE_Authority`
+- 客户端：只持有**自己的** PC，`GetLocalRole() == ROLE_AutonomousProxy`；别人的 PC 在客户端上不存在
+
+**核心差异**：
+- 服务器 PC 管"逻辑"：权限裁决、状态迁移（`RestartPlayer`/`UnPossess`）、Server RPC 执行、GameMode 和 GameState 调用
+- 客户端 PC 管"体验"：输入采集、本地预测执行、相机管理（`PlayerCameraManager`）、HUD/UI、发送 Server RPC
+
+同一玩家的两个 PC 实例通过 RPC + 属性复制保持同步，服务器始终是权威源。
+
+### GameplayEffectContext — GE 与 GameplayCue 之间的 HitResult 传递
+
+**核心链路**：`FGameplayEffectContext` 是贯穿 GA → GE → GameplayCue 全生命周期的数据载体。
+
+```
+GA_Melee Trace → FHitResult
+  → FGameplayEffectContextHandle
+    → Context.AddHitResult(Hit)      ← 写入
+    → MakeOutgoingSpec(GE, Context)  ← 绑定到 GE Spec
+      → ApplyGE(Spec, Target)
+        → GE 触发 GameplayCue Tag
+          → OnGameplayCue(Parameters)
+            → Parameters.EffectContext.GetHitResult() ← 读出
+```
+
+**蓝图侧的常见陷阱**：`BP_ApplyGameplayEffectToTarget` 的 `Context` 引脚悬空。即使前序节点（`MakeEffectContext` → `EffectContextAddHitResult`）正确写入了 HitResult，但 Context 没有连到 Apply 节点，GE 拿到的是默认空 Context，Cue 侧收不到任何数据。
+
+此外 `MakeGameplayCueParameters` 的 `EffectContext` 引脚需传入同一个 Context，`Location` / `Normal` 从 `BreakHitResult` 连接，才能让手动触发的 Cue 也拿到位置信息。
+
+**注意**：如果在 GE Asset 上配了 GameplayCue Tag，`BP_ApplyGameplayEffectToTarget` 会自动触发一次；后面再手动调 `K2_ExecuteGameplayCueWithParams` 会导致重复触发。
+
+### UPROPERTY Category 语法与 = 运算
+
+- `Category = "Foo"` 的 `=` 是 UPROPERTY 宏特有的**键值赋值语法**，表示 Category 的参数值是 "Foo"
+- 与纯标志型说明符（`EditAnywhere`、`BlueprintReadOnly`）不同，纯标志只写名字就生效，键值对需要通过 `=` 传递参数
+- `|` 是层级分隔符：`Category = "YMRPG|Number Pops"` 在 Details 面板中显示为 YMRPG → Number Pops 子分组
+- `Category` 对运行时无任何影响，纯粹是编辑器 UI 分组
+
+### UWidgetComponent 完整继承链
+
+五层结构，每层解决一个问题：
+
+| 层 | 回答了什么问题 | 关键新增 |
+|----|---------------|----------|
+| UActorComponent | "这个东西存在于 Actor 上" | 生命周期、Tick、渲染/物理状态、网络复制、Component Tags |
+| USceneComponent | "这个东西在空间中有位置" | RelativeLocation/Rotation/Scale、AttachParent 挂载层级、Bounds、Mobility |
+| UPrimitiveComponent | "这个东西能被看到、能被撞到" | BodyInstance 碰撞、SceneProxy 渲染线程表示、LOD/剔除、物理力、OnHit/OnOverlap 事件 |
+| UMeshComponent | "画它的时候用什么材质" | OverrideMaterials、OverlayMaterial、MaterialParameterCache 批量设参、纹理流式控制 |
+| UWidgetComponent | "画的内容是一个 UMG UI" | UUserWidget → SVirtualWindow → UTextureRenderTarget2D → 自动生成 Quad 网格材质 |
+
+UWidgetComponent 是整条链上唯一可直接实例化的类。核心管线：UMG Widget 绘制到 RenderTarget → 作为材质纹理贴到自动生成的平面/圆柱面上。两种空间模式：`World`（3D 世界中可被遮挡）和 `Screen`（始终面向镜头，类似头顶血条）。
+
+### InitialLifeSpan — Actor 自动销毁的生命周期计时器
+
+**工作流**：`BeginPlay()` 中调 `SetLifeSpan(InitialLifeSpan)` → `WorldTimerManager.SetTimer(LifeSpanExpired, InLifespan)` → 到期后 `LifeSpanExpired()` 调 `Destroy()`。
+
+**关键细节**：
+- `InitialLifeSpan` 只在 `BeginPlay` 时读取一次，运行时改它无效——要用 `SetLifeSpan()`
+- `SetLifeSpan(0)` 清除 Timer，取消自动销毁
+- `GetLifeSpan()` 返回当前 Timer 剩余时间，无 Timer 时返回 0
+- `SetLifeSpan` 会把参数写回 `InitialLifeSpan` 字段（便于序列化保存）
+
+**不生效的四种情况**（`Actor.cpp:6506`）：
+
+1. **不在服务器权威端**：Timer 只在 `ROLE_Authority` 或 `TearOff` 时设置。客户端不跑倒计时，靠服务器销毁后复制通知
+2. **值为 0 或负数**：`InLifespan > 0.0f` 不满足，走 ClearTimer 分支，Actor 永生
+3. **BeginPlay 前被 `SetLifeSpan(0)` 覆盖**：最隐蔽的情况。`InitialLifeSpan = 5.0` 在蓝图设好，但 C++ 构造函数或 `PostInitializeComponents` 中调了 `SetLifeSpan(0)` → `InitialLifeSpan` 被覆写为 0 → `BeginPlay` 读到 0 → 永生
+4. **World 无效**：`GetWorld()` 返回 null（极少见，正常 Spawn 的 Actor 在 BeginPlay 时已有 World）
+
+### UE 编译流程（UBT / UHT / MSBuild）
+
+UBT（Unreal Build Tool）是整个编译系统的调度器：
+- 解析 `.Build.cs` 和 `.Target.cs` 确定模块依赖
+- 调用 UHT 解析 `.h` 生成 `.generated.h` 和 `.gen.cpp`
+- 调度 MSBuild / clang 编译器编译生成的 C++
+
+两条编译路径：
+- **UBT 直接编译**：`UnrealBuildTool.exe YMRPGEditor Win64 Development -Project=xxx.uproject`，只需 .uproject，自动处理 UHT → 编译器
+- **MSBuild 走 .sln**：`MSBuild.exe YMRPG.sln /t:YMRPG`，多一层 VS 项目包装
+
+编译模式：`Development`（游戏模块优化，日常开发）vs `DebugGame`（游戏模块无优化 + 调试符号，需要断点调试时用）。引擎本身在两种模式下都是优化编译。
 
 </details>
