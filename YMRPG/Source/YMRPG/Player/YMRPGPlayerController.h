@@ -8,6 +8,7 @@
 
 class UInputMappingContext;
 class UUserWidget;
+class UYMRPGNumberPopComponent_UMG;
 
 /**
  *  Basic PlayerController class for a third person game
@@ -17,6 +18,9 @@ UCLASS(Config= Game, Meta = (ShortToolTip = "The Base Player Controller class fo
 class AYMRPGPlayerController : public APlayerController
 {
 	GENERATED_BODY()
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "YMRPG|DamageNum", meta = (AllowPrivateAccess= "true"))
+	TObjectPtr<UYMRPGNumberPopComponent_UMG> DamageNumComponent;
 
 public:
     	/** Constructor */
@@ -54,6 +58,9 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "YMRPG|PlayerController")
 	class AYMRPGHUD* GetYMRPGHUD() const;
+
+	UFUNCTION(BlueprintCallable, Category = "YMRPG|PlayerController")
+	UYMRPGNumberPopComponent_UMG* GetYMRPGNumberPopComponent() const;
 
 	virtual void PostProcessInput(const float DeltaTime, const bool bGamePaused) override;
 

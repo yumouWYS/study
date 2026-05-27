@@ -14,12 +14,13 @@
 #include "YMRPGPlayerState.h"
 #include "YMRPGHUD.h"
 #include "YMRPGCharacterBase.h"
-
+#include "YMRPGNumberPopComponent_UMG.h"	
 
 
 AYMRPGPlayerController::AYMRPGPlayerController(const FObjectInitializer& ObjectInitializer):Super(ObjectInitializer)
 {
-
+	DamageNumComponent = CreateDefaultSubobject<UYMRPGNumberPopComponent_UMG>(TEXT("DamageNumComponent"));
+	DamageNumComponent->SetIsReplicated(false);
 }
 
 void AYMRPGPlayerController::BeginPlay()
@@ -91,6 +92,11 @@ AYMRPGPlayerState* AYMRPGPlayerController::GetYMRPGPlayerState() const
 AYMRPGHUD* AYMRPGPlayerController::GetYMRPGHUD() const
 {
 	return CastChecked<AYMRPGHUD>(GetHUD(), ECastCheckedType::NullAllowed);
+}
+
+UYMRPGNumberPopComponent_UMG* AYMRPGPlayerController::GetYMRPGNumberPopComponent() const
+{
+	return DamageNumComponent;
 }
 
 void AYMRPGPlayerController::PostProcessInput(const float DeltaTime, const bool bGamePaused)

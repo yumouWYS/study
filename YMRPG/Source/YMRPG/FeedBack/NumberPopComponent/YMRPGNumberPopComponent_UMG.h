@@ -16,12 +16,12 @@ class UYMRPGNumberPopComponent_UMG : public UYMRPGNumberPopComponent
 public:
 	UYMRPGNumberPopComponent_UMG(const FObjectInitializer& ObjectInitializer = FObjectInitializer::Get());
 
-	virtual void AddNumberPop(const FYMRPGNumberPopRequest& NewRequest) {} override;
+	virtual void AddNumberPop(const FYMRPGNumberPopRequest& NewRequest) override;
 
 protected:
 
-	UPROPERTY(BlueprintReadWrite, EditDefaultOnly, Category = "YMRPG|NumberPop", meta = (AllowPrivateAccess = "true"))
-	TSubclassOf<AYMRPGNumberPopActor> NumberPopWidgetClass;
+	UPROPERTY(BlueprintReadWrite, EditDefaultsOnly, Category = "YMRPG|NumberPop", meta = (AllowPrivateAccess = "true"))
+	TSubclassOf<AYMRPGNumberPopActor> NumberPopActorClass;
 
 
 };

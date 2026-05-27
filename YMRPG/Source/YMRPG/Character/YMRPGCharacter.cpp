@@ -73,6 +73,17 @@ void AYMRPGCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComp
 		EnhancedInputComponent->BindAction(LookAction, ETriggerEvent::Triggered, this, &AYMRPGCharacter::Look);
 
 		EnhancedInputComponent->BindAction(MeleeAction, ETriggerEvent::Started, this, &AYMRPGCharacter::ActiveMelee);
+
+		EnhancedInputComponent->BindAction(AirAttackAction, ETriggerEvent::Started, this, &AYMRPGCharacter::ActiveAirAttack);
+
+		EnhancedInputComponent->BindAction(KeyAction_1, ETriggerEvent::Started, this, &AYMRPGCharacter::Key_1);
+
+		EnhancedInputComponent->BindAction(KeyAction_2, ETriggerEvent::Started, this, &AYMRPGCharacter::Key_2);
+
+		EnhancedInputComponent->BindAction(KeyAction_3, ETriggerEvent::Started, this, &AYMRPGCharacter::Key_3);
+
+		EnhancedInputComponent->BindAction(KeyAction_4, ETriggerEvent::Started, this, &AYMRPGCharacter::Key_4);
+		
 	}
 	else
 	{
@@ -117,6 +128,41 @@ void AYMRPGCharacter::ActiveMelee()
 	GetYMRPGComboComponent()->SetPressed();
 
 	FGameplayTag InPutTag = YMRPGGameplayTags::FindTagByString(TEXT("InputTag.Melee"), true);
+
+	GetYMRPGAbilitySystemComponent()->AbilityInputTagPressed(InPutTag);
+}
+
+void AYMRPGCharacter::ActiveAirAttack()
+{
+	FGameplayTag InPutTag = YMRPGGameplayTags::FindTagByString(TEXT("InputTag.AirAttack"), true);
+
+	GetYMRPGAbilitySystemComponent()->AbilityInputTagPressed(InPutTag);
+}
+
+void AYMRPGCharacter::Key_1()
+{
+	FGameplayTag InPutTag = YMRPGGameplayTags::FindTagByString(TEXT("InputTag.Key.1"), true);
+
+	GetYMRPGAbilitySystemComponent()->AbilityInputTagPressed(InPutTag);
+}
+
+void AYMRPGCharacter::Key_2()
+{
+	FGameplayTag InPutTag = YMRPGGameplayTags::FindTagByString(TEXT("InputTag.Key.2"), true);
+
+	GetYMRPGAbilitySystemComponent()->AbilityInputTagPressed(InPutTag);
+}
+
+void AYMRPGCharacter::Key_3()
+{
+	FGameplayTag InPutTag = YMRPGGameplayTags::FindTagByString(TEXT("InputTag.Key.3"), true);
+
+	GetYMRPGAbilitySystemComponent()->AbilityInputTagPressed(InPutTag);
+}
+
+void AYMRPGCharacter::Key_4()
+{
+	FGameplayTag InPutTag = YMRPGGameplayTags::FindTagByString(TEXT("InputTag.Key.4"), true);
 
 	GetYMRPGAbilitySystemComponent()->AbilityInputTagPressed(InPutTag);
 }

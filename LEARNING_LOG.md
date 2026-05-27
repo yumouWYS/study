@@ -14,6 +14,7 @@
 - [2026-05-20](#ymrpg-2026-05-20) — UMG 四层架构与 Slate 即时模式、UMG 核心类体系、UWidgetBlueprintGeneratedClass 动画查找与 `_INST` 后缀、BindWidget 元数据自动绑定、UI Tick 路径中的 FString→FText 字符串性能优化
 - [2026-05-21](#ymrpg-2026-05-21) — OnRep/RepNotify 回调链、REPNOTIFY_Always 原因、服务端/客户端代码分布全景、连招外挂安全性、GA 同步 vs AttributeSet 同步、CanActivateAbility 双端执行与 PredictionKey 回滚、死亡全流程（伤害致死→GameplayEvent→GA_Death→StartDeath→客户端重放→FinishDeath→销毁）、YMRPGGameplayAbility_Death C++ 基类、GA_Death 蓝图与 AutoRespawn、GameplayCue 子系统、GCN Burst vs BurstLatent、SurvivesDeath Tag
 - [2026-05-24](#ymrpg-2026-05-24) — GAS 引擎源码蒸馏项目：Skill 架构设计（单入口 + 多 reference）、子系统拆分粒度、双层知识模型（现有 Skill"怎么做" vs 蒸馏 Skill"为什么这样做"）、4 步制作流程（测绘→深读→合成→验证）、7 章模板确立
+- [2026-05-27](#ymrpg-2026-05-27) — NumberPop 伤害数字四层架构、增强输入系统 IA/IMC/绑定与四重解耦、IMC 按键冲突场景（AccumulationBehavior / bConsumeInput / Priority）、IMC 动态激活取消（Add/RemoveMappingContext + CountRegistrations）
 
 ---
 
@@ -2070,4 +2071,177 @@ P0 做了完整逐断言验证。P1-P6 验证程度不一致（部分断言依�
 **复制模式的工程权衡**：`Full` 全量复制（小规模、所有玩家需要看到所有效果），`Mixed`（Owner 全量 + Simulated 仅标签，标准多人默认），`Minimal`（仅标签，大规模多人）。`ReplicatedPredictionKeyMap` 必须最后复制（`COND_OwnerOnly`），因为其 OnRep 中的 CatchUpTo 需要在所有其他属性的 OnRep 之后运行。
 
 **引擎级概念（留待 Network Skill 深挖）**：`FRepLayout` 属性序列化与变更检测、`FObjectReplicator` 子对象复制管线、`FFastArraySerializer::NetDeltaSerialize` 增量序列化算法、`UNetDriver::ProcessRemoteFunction` RPC 调用链、`COND_Dynamic` 动态条件复制决策机制、Iris `FNetToken` 复制系统。目前阶段理解其行为层面即可，引擎实现细节在网络阶段专门学习。
+</details>
+
+---
+
+<details>
+<summary><b>2026-05-27</b></summary>
+
+## 2026-05-27 — NumberPop 系统架构与增强输入系统
+
+### NumberPop 伤害数字系统 — 四层架构
+
+完整的伤害数字弹出系统，从数据传入到 UI 显示+淡出动画的完整链路。
+
+#### 四层结构与职责
+
+```
+蓝图调用方 (GA_Melee / DamageExecution)
+  │  FYMRPGNumberPopRequest { WorldLocation, NumberToDisplay, ColorToDisplay }
+  ▼
+UYMRPGNumberPopComponent_UMG (挂在 PlayerController 上)
+  · IsLocalController 守卫 — 只在本机玩家屏幕显示
+  · 摄像机 Transform + 随机偏移 ±5 (RandPointInBox) — 避免数字重叠
+  · SpawnActor<AYMRPGNumberPopActor> — 生成临时 Actor
+  ▼
+AYMRPGNumberPopActor (世界中的临时 Actor)
+  · SceneComponent (Root) + UWidgetComponent (挂载 UUI_DamageNum)
+  · PrimaryActorTick = false, Collision = NoCollision
+  · InitialLifeSpan = 4.0s → 自动销毁
+  · UpdateNum() / UpdateNumColor() → Cast UUI_DamageNum 后转发
+  ▼
+UUI_DamageNum (UMG Widget, 继承 UUI_Base)
+  · DamageNum (UTextBlock, BindWidget)
+  · NativeConstruct → PlayWidgetAnim("FadeAnimation") — 数字上浮淡出
+  · UpdateNum → SetText, UpdateNumColor → SetColorAndOpacity
+```
+
+#### 设计决策分析
+
+| 决策 | 原因 |
+|---|---|
+| Component 挂在 PC 上 | 伤害数字是"谁看到"的问题，不是"谁被打"。PC 天然隔离端侧 |
+| SetIsReplicated(false) | 纯客户端表现，不浪费复制带宽 |
+| SpawnActor + WidgetComponent | 3D 空间定位（在受击点上方），而非固定屏幕坐标 |
+| 基类 abstract + 空函数体 | 设计留了口子给 Niagara 实现（UYMRPGNumberPopComponent_Niagara），但目前 {} 而非纯虚函数，子类不 override 会静默吞掉请求 |
+| InitialLifeSpan 而非手动 Timer | SetLifeSpan 由 WorldTimerManager 管理，BeginPlay 时设好，到点自动 Destroy |
+| NumberPopActor::UpdateNum 用 Cast | WidgetComponent 的 Widget Class 由蓝图指定（BP_DamageNumberPopActor 上配 WBP_DamageNum），C++ 不写死 |
+
+#### 当前存在的 Bug
+
+`YMRPGNumberPopComponent_UMG.cpp:39` — SpawnActor 使用的 `NewRequest.WorldLocation` 而非叠加了随机偏移的 `NumberLocation`，随机偏移计算了但未生效。
+
+### 增强输入系统 — IA / IMC / 绑定 三层架构
+
+#### Input Action (IA) — "我想做什么"
+
+不包含任何按键信息，只定义：
+- **值类型**：`Digital`(bool) → Jump/Melee, `Axis2D`(FVector2D) → Move/Look
+- **触发事件**：`Started`（按下）、`Triggered`（持续）、`Completed`（松开）、`Canceled`（中断）
+- **AccumulationBehavior**：多键映射同一 IA 时的合并策略
+
+触发事件的典型用法：
+```cpp
+// 一次性动作用 Started，防重复
+BindAction(MeleeAction, Started, this, &ActiveMelee);
+
+// 连续输入用 Triggered，每帧调用
+BindAction(MoveAction, Triggered, this, &Move);
+
+// 需要按下+释放对用 Started + Completed
+BindAction(JumpAction, Started, this, &ActiveJump);
+BindAction(JumpAction, Completed, this, &UnActiveJump);
+```
+
+#### Input Mapping Context (IMC) — "什么按键触发什么意图"
+
+IMC 是按键→IA 的映射表。策划在编辑器里配置，改键零代码。同一按键可绑多个 IA（一个按键同时触发跳跃和交互是合理的）。
+
+项目中 `IMC_Default` 的典型映射：W/A/S/D → `IA_Move`，鼠标 X/Y → `IA_MouseLook`，空格 → `IA_Jump`，左键 → `IA_Melee`。
+
+#### 绑定 (EnhancedInputComponent) — "意图发生时调哪个函数"
+
+```cpp
+EnhancedInputComponent->BindAction(JumpAction, Started, this, &ActiveJump);
+```
+
+三元绑定 (IA, 触发时机, 目标/函数指针)，编译期检查。处理函数接收 `FInputActionValue`，`.Get<FVector2D>()` 统一不同类型取值。
+
+#### 四重解耦
+
+| 解耦 | 分离了什么 | 改什么不需改什么 |
+|---|---|---|
+| IA ↔ IMC | 意图与按键 | 改按键（空格→手柄A）：只改 IMC，代码不动 |
+| IMC 加载/卸载 | 映射表与生效范围 | 战斗模式切新 IMC：Add/RemoveMappingContext，代码不动 |
+| FInputActionValue | 处理代码与输入设备 | 键盘/手柄/触屏：Move() 函数完全一样 |
+| Modifier 链 | 核心逻辑与输入修饰 | 反转 Y 轴：在 IA 上加 Negate Modifier，代码不动 |
+
+### IMC 按键冲突的四种场景
+
+#### 场景 1：一个按键 → 多个 IA
+**全部触发**。设计预期行为，不需控制。
+
+#### 场景 2：多个按键 → 同一 IA
+由 IA 资产上的 `AccumulationBehavior` 决定：
+
+| 模式 | 行为 | 适用场景 |
+|---|---|---|
+| `TakeHighestAbsoluteValue`（默认） | 取各分量绝对值最大者 | 不适合作 WASD 移动 |
+| `Cumulative` | 各分量累加 | W(+1)+S(-1)=0，角色不动 |
+
+**WASD 移动必须设为 Cumulative**，否则同时按 W+S 时"后处理者覆盖先处理者"，结果是后退而非原地不动。
+
+源码位置：`EnhancedPlayerInput.cpp:191-223` — 逐分量按策略合并 FVector 值。
+
+#### 场景 3：不同优先级 IMC 同一按键
+由 **Priority + `bConsumeInput`** 决定：
+```cpp
+// 源码 EnhancedInputSubsystemInterface.cpp:492-498
+if (Stage == EStage::Pre && Mapping.Action->bConsumeInput)
+    Issue = HiddenByExistingMapping;     // 被高优先级 IMC 阻挡
+else if (Stage == EStage::Post && Action->bConsumeInput)
+    Issue = HidesExistingMapping;        // 低优先级的 bConsumeInput 无效
+```
+
+优先级大的 IMC 先处理。若其 IA 勾了 `bConsumeInput=true`，该按键被"吃掉"，后面的 IMC 不再收到。
+
+#### 场景 4：同一 IMC 内冲突
+都触发，但 `QueryMapKeyIn...` 调试 API 会报告 `CollisionWithMappingInSameContext`。应避免同 IMC 内同一按键绑多个 IA — 应合并为单一 IA 在逻辑层分发。
+
+### IMC 动态激活与取消
+
+#### 核心 API
+
+```cpp
+UEnhancedInputLocalPlayerSubsystem* Subsystem =
+    ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(GetLocalPlayer());
+
+// 激活
+Subsystem->AddMappingContext(IMC_Combat, 10);
+// 取消
+Subsystem->RemoveMappingContext(IMC_Combat);
+// 全部清空
+Subsystem->ClearAllMappings();
+```
+
+#### FModifyContextOptions 两个关键参数
+
+| 参数 | 默认 | 含义 |
+|---|---|---|
+| `bIgnoreAllPressedKeysUntilRelease` | `true` | 切 IMC 时"按住不放的键"要松开再按才生效（防止切 UI 时 W 被解释为"向上导航"） |
+| `bForceImmediately` | `false` | 是否立即重建映射表，默认等下一帧 |
+
+#### 变更非即时 — RequestRebuildControlMappings
+
+Add/Remove 不会立即生效，标记重建标志后在下一帧 `ProcessInputStack` 中执行：展平所有活跃 IMC 条目 → 按优先级排序 → 重新实例化 Modifier/Trigger → 重建 EnhancedActionMappings 数组 → 更新 Chord 拦截 → 清理废弃 ActionInstanceData。
+
+#### CountRegistrations 追踪模式
+
+IMC 资产上的 `Registration Tracking Mode`：
+- **Untracked**（默认）：重复 Add 忽略，一次 Remove 即移除
+- **CountRegistrations**：引用计数。两次 Add + 一次 Remove = 还在；全部 Remove 才移出。适用于嵌套 UI：两个弹窗各自 Add IMC_UI，关一个 Remove 一次，全关才移出
+
+源码 `EnhancedInputSubsystemInterface.cpp:246-257` — `RegistrationCount--` 归零才真正移除。
+
+#### 典型运行时切换模式
+
+```
+默认: IMC_Default (P=0) — Move/Look/Jump/Melee
+进入战斗: Add IMC_Combat (P=10) — ComboAttack/ChargedAttack，bConsumeInput 拦截 Default 左键
+打开菜单: Add IMC_UI (P=20) — 导航/确认，bConsumeInput 拦截所有游戏输入
+关闭菜单: Remove IMC_UI → 自动回退到战斗或默认
+退出战斗: Remove IMC_Combat → 回到 Default
+```
+
 </details>
