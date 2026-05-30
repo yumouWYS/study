@@ -5,22 +5,22 @@
 #include "GameplayTagContainer.h"
 #include "YMRPGHitBox.generated.h"
 
-class YMRPGCharacterBase;
+class AYMRPGCharacterBase;
 
 
 UCLASS()
-class UYMRPGHitBox : public AActor
+class AYMRPGHitBox : public AActor
 {
 	GENERATED_BODY()
 
-	UPROPERTY(VisibleAnyWhere, BlueprintReadOnly, Category= "HitCollision", meta = (AllowPricateAccess = "ture"))
+	UPROPERTY(VisibleAnyWhere, BlueprintReadOnly, Category= "HitCollision", meta = (AllowPrivateAccess = "ture"))
 	class USceneComponent* HitCollisionRootComponent;
 
-	UPROPERTY(VisibleAnyWhere, BlueprintReadOnly, Category = "HitCollision", meta = (AllowPricateAccess = "ture"))
+	UPROPERTY(VisibleAnyWhere, BlueprintReadOnly, Category = "HitCollision", meta = (AllowPrivateAccess = "ture"))
 	class UBoxComponent* HitCollisionBox;
 
 public:
-	UYMRPGHitBox(const FObjectInitializer& ObjectInitializer);
+	AYMRPGHitBox(const FObjectInitializer& ObjectInitializer);
 
 	UFUNCTION()
 	virtual void HandleDamage(
@@ -29,7 +29,7 @@ public:
 		UPrimitiveComponent* OtherComponent,
 		int32 OtherBodyIndex,
 		bool bFromSweep,
-		const FhitResult& SweepResult
+		const FHitResult& SweepResult
 	);
 
 	//返回碰撞盒子的函数
@@ -42,7 +42,7 @@ public:
 	void SetBoxExtent(const FVector& InNewBoxExtent);
 
 	//设置GAS标签，告诉系统，我们要激发哪一个对应的能力
-	void SetBuffs(const TArray<FGameplayTagContainer>& InBuffs) { Buffers = InBuffs; };
+	void SetBuffs(const TArray<FGameplayTagContainer>& InBuffs) { Buffs = InBuffs; };
 
 	bool IsExist(AYMRPGCharacterBase* InCharacter) const;
 

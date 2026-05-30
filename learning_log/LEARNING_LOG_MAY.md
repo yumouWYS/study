@@ -15,6 +15,8 @@
 - [2026-05-21](#ymrpg-2026-05-21) — OnRep/RepNotify 回调链、REPNOTIFY_Always 原因、服务端/客户端代码分布全景、连招外挂安全性、GA 同步 vs AttributeSet 同步、CanActivateAbility 双端执行与 PredictionKey 回滚、死亡全流程（伤害致死→GameplayEvent→GA_Death→StartDeath→客户端重放→FinishDeath→销毁）、YMRPGGameplayAbility_Death C++ 基类、GA_Death 蓝图与 AutoRespawn、GameplayCue 子系统、GCN Burst vs BurstLatent、SurvivesDeath Tag
 - [2026-05-24](#ymrpg-2026-05-24) — GAS 引擎源码蒸馏项目：Skill 架构设计（单入口 + 多 reference）、子系统拆分粒度、双层知识模型（现有 Skill"怎么做" vs 蒸馏 Skill"为什么这样做"）、4 步制作流程（测绘→深读→合成→验证）、7 章模板确立
 - [2026-05-26](#ymrpg-2026-05-26) — PlayerController 服务器/客户端分布、GameplayEffectContext 传递 HitResult（蓝图 Context 引脚悬空排错、UWidgetComponent 继承链详解、InitialLifeSpan 原理与不生效条件
+- [2026-05-27](#ymrpg-2026-05-27) — NumberPop 伤害数字四层架构、增强输入系统 IA/IMC/绑定与四重解耦、IMC 按键冲突场景（AccumulationBehavior / bConsumeInput / Priority）、IMC 动态激活取消（Add/RemoveMappingContext + CountRegistrations）
+- [2026-05-31](#ymrpg-2026-05-31) — SpawnActorDeferred 两阶段生成、WaitGameplayEvent 触发机制（HandleGameplayEvent 三阶段分发）、DamageExecution_Defense 完整代码走读与攻防公式修正、PreInitCollision 七类碰撞抛体配置、bIsHomingProjectile 追踪原理
 
 ---
 
@@ -2144,5 +2146,310 @@ UWidgetComponent 是整条链上唯一可直接实例化的类。核心管线：
 2. **值为 0 或负数**：`InLifespan > 0.0f` 不满足，走 ClearTimer 分支，Actor 永生
 3. **BeginPlay 前被 `SetLifeSpan(0)` 覆盖**：最隐蔽的情况。`InitialLifeSpan = 5.0` 在蓝图设好，但 C++ 构造函数或 `PostInitializeComponents` 中调了 `SetLifeSpan(0)` → `InitialLifeSpan` 被覆写为 0 → `BeginPlay` 读到 0 → 永生
 4. **World 无效**：`GetWorld()` 返回 null（极少见，正常 Spawn 的 Actor 在 BeginPlay 时已有 World）
+
+</details>
+
+---
+
+<details>
+<summary><b>2026-05-27</b></summary>
+
+## 2026-05-27 — NumberPop 系统架构与增强输入系统
+
+### NumberPop 伤害数字系统 — 四层架构
+
+完整的伤害数字弹出系统，从数据传入到 UI 显示+淡出动画的完整链路。
+
+#### 四层结构与职责
+
+```
+蓝图调用方 (GA_Melee / DamageExecution)
+  │  FYMRPGNumberPopRequest { WorldLocation, NumberToDisplay, ColorToDisplay }
+  ▼
+UYMRPGNumberPopComponent_UMG (挂在 PlayerController 上)
+  · IsLocalController 守卫 — 只在本机玩家屏幕显示
+  · 摄像机 Transform + 随机偏移 ±5 (RandPointInBox) — 避免数字重叠
+  · SpawnActor<AYMRPGNumberPopActor> — 生成临时 Actor
+  ▼
+AYMRPGNumberPopActor (世界中的临时 Actor)
+  · SceneComponent (Root) + UWidgetComponent (挂载 UUI_DamageNum)
+  · PrimaryActorTick = false, Collision = NoCollision
+  · InitialLifeSpan = 4.0s → 自动销毁
+  · UpdateNum() / UpdateNumColor() → Cast UUI_DamageNum 后转发
+  ▼
+UUI_DamageNum (UMG Widget, 继承 UUI_Base)
+  · DamageNum (UTextBlock, BindWidget)
+  · NativeConstruct → PlayWidgetAnim("FadeAnimation") — 数字上浮淡出
+  · UpdateNum → SetText, UpdateNumColor → SetColorAndOpacity
+```
+
+#### 设计决策分析
+
+| 决策 | 原因 |
+|---|---|
+| Component 挂在 PC 上 | 伤害数字是"谁看到"的问题，不是"谁被打"。PC 天然隔离端侧 |
+| SetIsReplicated(false) | 纯客户端表现，不浪费复制带宽 |
+| SpawnActor + WidgetComponent | 3D 空间定位（在受击点上方），而非固定屏幕坐标 |
+| 基类 abstract + 空函数体 | 设计留了口子给 Niagara 实现（UYMRPGNumberPopComponent_Niagara），但目前 {} 而非纯虚函数，子类不 override 会静默吞掉请求 |
+| InitialLifeSpan 而非手动 Timer | SetLifeSpan 由 WorldTimerManager 管理，BeginPlay 时设好，到点自动 Destroy |
+| NumberPopActor::UpdateNum 用 Cast | WidgetComponent 的 Widget Class 由蓝图指定（BP_DamageNumberPopActor 上配 WBP_DamageNum），C++ 不写死 |
+
+#### 当前存在的 Bug
+
+`YMRPGNumberPopComponent_UMG.cpp:39` — SpawnActor 使用的 `NewRequest.WorldLocation` 而非叠加了随机偏移的 `NumberLocation`，随机偏移计算了但未生效。
+
+### 增强输入系统 — IA / IMC / 绑定 三层架构
+
+#### Input Action (IA) — "我想做什么"
+
+不包含任何按键信息，只定义：
+- **值类型**：`Digital`(bool) → Jump/Melee, `Axis2D`(FVector2D) → Move/Look
+- **触发事件**：`Started`（按下）、`Triggered`（持续）、`Completed`（松开）、`Canceled`（中断）
+- **AccumulationBehavior**：多键映射同一 IA 时的合并策略
+
+触发事件的典型用法：
+```cpp
+// 一次性动作用 Started，防重复
+BindAction(MeleeAction, Started, this, &ActiveMelee);
+
+// 连续输入用 Triggered，每帧调用
+BindAction(MoveAction, Triggered, this, &Move);
+
+// 需要按下+释放对用 Started + Completed
+BindAction(JumpAction, Started, this, &ActiveJump);
+BindAction(JumpAction, Completed, this, &UnActiveJump);
+```
+
+#### Input Mapping Context (IMC) — "什么按键触发什么意图"
+
+IMC 是按键→IA 的映射表。策划在编辑器里配置，改键零代码。同一按键可绑多个 IA（一个按键同时触发跳跃和交互是合理的）。
+
+项目中 `IMC_Default` 的典型映射：W/A/S/D → `IA_Move`，鼠标 X/Y → `IA_MouseLook`，空格 → `IA_Jump`，左键 → `IA_Melee`。
+
+#### 绑定 (EnhancedInputComponent) — "意图发生时调哪个函数"
+
+```cpp
+EnhancedInputComponent->BindAction(JumpAction, Started, this, &ActiveJump);
+```
+
+三元绑定 (IA, 触发时机, 目标/函数指针)，编译期检查。处理函数接收 `FInputActionValue`，`.Get<FVector2D>()` 统一不同类型取值。
+
+#### 四重解耦
+
+| 解耦 | 分离了什么 | 改什么不需改什么 |
+|---|---|---|
+| IA ↔ IMC | 意图与按键 | 改按键（空格→手柄A）：只改 IMC，代码不动 |
+| IMC 加载/卸载 | 映射表与生效范围 | 战斗模式切新 IMC：Add/RemoveMappingContext，代码不动 |
+| FInputActionValue | 处理代码与输入设备 | 键盘/手柄/触屏：Move() 函数完全一样 |
+| Modifier 链 | 核心逻辑与输入修饰 | 反转 Y 轴：在 IA 上加 Negate Modifier，代码不动 |
+
+### IMC 按键冲突的四种场景
+
+#### 场景 1：一个按键 → 多个 IA
+**全部触发**。设计预期行为，不需控制。
+
+#### 场景 2：多个按键 → 同一 IA
+由 IA 资产上的 `AccumulationBehavior` 决定：
+
+| 模式 | 行为 | 适用场景 |
+|---|---|---|
+| `TakeHighestAbsoluteValue`（默认） | 取各分量绝对值最大者 | 不适合作 WASD 移动 |
+| `Cumulative` | 各分量累加 | W(+1)+S(-1)=0，角色不动 |
+
+**WASD 移动必须设为 Cumulative**，否则同时按 W+S 时"后处理者覆盖先处理者"，结果是后退而非原地不动。
+
+源码位置：`EnhancedPlayerInput.cpp:191-223` — 逐分量按策略合并 FVector 值。
+
+#### 场景 3：不同优先级 IMC 同一按键
+由 **Priority + `bConsumeInput`** 决定：
+```cpp
+// 源码 EnhancedInputSubsystemInterface.cpp:492-498
+if (Stage == EStage::Pre && Mapping.Action->bConsumeInput)
+    Issue = HiddenByExistingMapping;     // 被高优先级 IMC 阻挡
+else if (Stage == EStage::Post && Action->bConsumeInput)
+    Issue = HidesExistingMapping;        // 低优先级的 bConsumeInput 无效
+```
+
+优先级大的 IMC 先处理。若其 IA 勾了 `bConsumeInput=true`，该按键被"吃掉"，后面的 IMC 不再收到。
+
+#### 场景 4：同一 IMC 内冲突
+都触发，但 `QueryMapKeyIn...` 调试 API 会报告 `CollisionWithMappingInSameContext`。应避免同 IMC 内同一按键绑多个 IA — 应合并为单一 IA 在逻辑层分发。
+
+### IMC 动态激活与取消
+
+#### 核心 API
+
+```cpp
+UEnhancedInputLocalPlayerSubsystem* Subsystem =
+    ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(GetLocalPlayer());
+
+// 激活
+Subsystem->AddMappingContext(IMC_Combat, 10);
+// 取消
+Subsystem->RemoveMappingContext(IMC_Combat);
+// 全部清空
+Subsystem->ClearAllMappings();
+```
+
+#### FModifyContextOptions 两个关键参数
+
+| 参数 | 默认 | 含义 |
+|---|---|---|
+| `bIgnoreAllPressedKeysUntilRelease` | `true` | 切 IMC 时"按住不放的键"要松开再按才生效（防止切 UI 时 W 被解释为"向上导航"） |
+| `bForceImmediately` | `false` | 是否立即重建映射表，默认等下一帧 |
+
+#### 变更非即时 — RequestRebuildControlMappings
+
+Add/Remove 不会立即生效，标记重建标志后在下一帧 `ProcessInputStack` 中执行：展平所有活跃 IMC 条目 → 按优先级排序 → 重新实例化 Modifier/Trigger → 重建 EnhancedActionMappings 数组 → 更新 Chord 拦截 → 清理废弃 ActionInstanceData。
+
+#### CountRegistrations 追踪模式
+
+IMC 资产上的 `Registration Tracking Mode`：
+- **Untracked**（默认）：重复 Add 忽略，一次 Remove 即移除
+- **CountRegistrations**：引用计数。两次 Add + 一次 Remove = 还在；全部 Remove 才移出。适用于嵌套 UI：两个弹窗各自 Add IMC_UI，关一个 Remove 一次，全关才移出
+
+源码 `EnhancedInputSubsystemInterface.cpp:246-257` — `RegistrationCount--` 归零才真正移除。
+
+#### 典型运行时切换模式
+
+```
+默认: IMC_Default (P=0) — Move/Look/Jump/Melee
+进入战斗: Add IMC_Combat (P=10) — ComboAttack/ChargedAttack，bConsumeInput 拦截 Default 左键
+打开菜单: Add IMC_UI (P=20) — 导航/确认，bConsumeInput 拦截所有游戏输入
+关闭菜单: Remove IMC_UI → 自动回退到战斗或默认
+退出战斗: Remove IMC_Combat → 回到 Default
+```
+
+</details>
+
+<details>
+<summary><b>2026-05-31</b></summary>
+## 2026-05-31 — SpawnActorDeferred、WaitGameplayEvent 触发、DamageExecution 攻防公式、HitBox 碰撞体系
+
+### SpawnActorDeferred — 延迟 Actor 生成
+
+用 `bDeferConstruction = true` 将 Actor 生成拆成两阶段：创建对象（不跑 Construction Script）→ 设属性 → 手动 FinishSpawning（跑构造脚本）。
+
+**核心流程**：
+```
+World->SpawnActorDeferred<T>(Class, Transform)  // bDeferConstruction = true
+  → SpawnActor → PostSpawnInitialize
+    → bDeferConstruction 为 true，跳过 FinishSpawning
+    → Transform 缓存在 GSpawnActorDeferredTransformCache
+
+Actor->CustomProperty = Value;  // 在构造脚本执行前设属性
+
+Actor->FinishSpawning(Transform)
+  → ExecuteConstruction()      // 蓝图构造脚本运行，读到刚才设的属性
+  → PostActorConstruction()    // 初始化组件、碰撞处理
+  → 广播 OnActorFinishedSpawning
+```
+
+**Transform 修正机制**：FinishSpawning 时如果传入的 Transform 与原始不同，会用缓存反算模板空间后重新计算最终位置（Actor.cpp:4329）。
+
+**使用场景**：构造脚本需要根据运行时参数决定创建哪些子组件、设置什么材质——而这些参数在 Spawn 时才能确定。
+
+### WaitGameplayEvent 蓝图节点 — 被动监听 + 主动发送
+
+蓝图里的 Wait Gameplay Event 是被动监听器，需要另一侧通过 `HandleGameplayEvent` 触发。
+
+**发送端**：
+```cpp
+// 蓝图侧
+Send Gameplay Event to Actor(Actor, EventTag, Payload)
+
+// C++ 侧（等价）
+ASC->HandleGameplayEvent(EventTag, &Payload);
+```
+
+**HandleGameplayEvent 内部三阶段分发**（AbilitySystemComponent_Abilities.cpp:2536-2577）：
+
+| 阶段 | 行为 | WaitGameplayEvent 绑定位置 |
+|---|---|---|
+| ① 触发基于事件的主动技能 | 遍历 EventTag 及其父标签，查找 `GameplayEventTriggeredAbilities` map，调用 `TriggerAbilityFromGameplayEvent` | 不涉及 |
+| ② 精确匹配回调 | `GenericGameplayEventCallbacks[EventTag].Broadcast(Payload)` — O(1) 查找 | `OnlyMatchExact = true` 走这里 |
+| ③ 通配符/容器匹配 | 线性扫描 `GameplayEventTagContainerDelegates`，`EventTag.MatchesAny(Filter)` 命中则广播 | `OnlyMatchExact = false` 走这里 |
+
+**关键参数**：
+- `OnlyMatchExact(true)`：发送 Tag 必须完全等于监听 Tag
+- `OnlyMatchExact(false)`：子标签也匹配，如监听 `A.B` 可收到 `A.B.C`
+- `OnlyTriggerOnce`：收到一次后自动 EndTask
+- `OptionalExternalTarget`：监听别的 Actor 的 ASC，不填默认当前 ASC
+
+### YMRPGDamageExecution_Defense — GEEC 完整代码走读
+
+**类职责**：`UGameplayEffectExecutionCalculation` 子类，提供自定义伤害计算逻辑（查多个属性、取 Tag、分支判断），在 GE 蓝图的 Executions 数组里配置。
+
+**调用链**：`ASC->ApplyGameplayEffectSpecToTarget()` → GE Modifiers 先执行 → Executions 依次执行 → `Execute_Implementation` → `PostGameplayEffectExecute` 收尾。
+
+**关键代码点**：
+
+1. **FDamageStatics 结构体** — `FGameplayEffectAttributeCaptureDefinition` 声明捕获哪个属性、从谁身上捕获（Source/Target）、是否快照（bSnapshot = true：GE 应用瞬间快照该值）
+
+2. **`RelevantAttributesToCapture.Add()`** — 构造函数里注册捕获定义。引擎在 GE 应用前遍历此数组去快照属性值。不加这行，`AttemptCalculateCapturedAttributeMagnitude` 永远返回 false
+
+3. **`#if WITH_SERVER_CODE`** — 伤害计算只在服务器执行，客户端通过属性复制拿到结果
+
+4. **修复前（原写法）**：通过 EffectContext 间接获取 ASC
+   ```cpp
+   // EffectCauser 和 OriginalInstigator 实际都指向攻击方
+   AActor* EffectCauser = EffectContextHandle.GetEffectCauser();
+   EffectASC = UAbilitySystemBlueprintLibrary::GetAbilitySystemComponent(EffectCauser);
+   OriginalASC = EffectContextHandle.GetOriginalInstigatorAbilitySystemComponent();
+   // 公式实际为: max(0, Damage - 攻击方Defense + 攻击方Attack) → Defense 读错对象
+   ```
+
+5. **修复后（新写法）**：直接从 ExecutionParams 获取
+   ```cpp
+   TargetASC = ExecutionParams.GetTargetAbilitySystemComponent();  // 受击方 Defense
+   SourceASC = ExecutionParams.GetSourceAbilitySystemComponent();  // 攻击方 Attack
+   // 公式: max(0, Damage - 受击方Defense + 攻击方Attack) → 正确的攻防公式
+   ```
+   `ExecutionParams::GetXxxASC()` 直接有效，无需 null 检查和间接查找，比 EffectContext → Actor → BlueprintLibrary 少两层间接
+
+6. **Damage 管道属性模式**：Execution 输出到 Damage → PostGameplayEffectExecute 读取 Damage 扣 Health → 清零 Damage。Damage 只作为临时管道值
+
+### PreInitCollision — 七类碰撞抛体配置
+
+`AYMRPGHitBox_ApplyGameEffect::PreInitCollision` 根据 `EYMRPGHitCollisionType` 配置 `UProjectileMovementComponent` 的行为。
+
+**分类逻辑**：
+
+| 类别 | 类型 | 配置 | 说明 |
+|---|---|---|---|
+| 静止型 | SHORT_RANGE / RANGE / CHAIN | Speed=0, GravityScale=0 | 碰撞盒留在生成位置，近战跟随角色，AOE/链式在 HandleDamage 中分发 |
+| 直线飞行 | DIRECT_LINE | Rotation 清零 + Velocity | 无阻碍直线攻击（hitscan），不关心碰撞盒朝向 |
+| 直线飞行 | LINE | Rotation 朝向射击方向 + Velocity | 子弹类投射物，碰撞盒与飞行方向一致 |
+| 直线飞行 | RANGE_LINE | 仅 Velocity | 移动 AOE 区域，与 LINE 的区别在 HandleDamage 的伤害分发逻辑 |
+| 追踪型 | TRACK_LINE | bIsHomingProjectile + Velocity | 追踪弹，HomingTargetComponent 需 GA 侧在 Spawn 后单独设置 |
+
+### bIsHomingProjectile — 追踪弹原理
+
+`UProjectileMovementComponent::ComputeAcceleration`（ProjectileMovementComponent.cpp:503）每帧计算加速度：
+
+```cpp
+if (bIsHomingProjectile && HomingTargetComponent.IsValid())
+{
+    Acceleration += ComputeHomingAcceleration(InVelocity, DeltaTime);
+}
+```
+
+**ComputeHomingAcceleration 实现**（:512）：
+```cpp
+FVector HomingAcceleration =
+    (HomingTargetComponent->GetComponentLocation() - UpdatedComponent->GetComponentLocation())
+    .GetSafeNormal() * HomingAccelerationMagnitude;
+```
+
+每帧算出"指向目标的单位方向 × HomingAccelerationMagnitude"作为加速度。这不是瞬间转向，而是惯性+追踪力博弈。值越大转弯越猛。
+
+**两个条件缺一不可**：`bIsHomingProjectile = true` AND `HomingTargetComponent` 有效。光打开关不够，GA 侧必须在 SpawnActor 后把目标的 RootComponent 赋给 HomingTargetComponent。
+
+**额外副作用**：追踪弹强制开启子步模拟（sub-stepping），因为目标可能在移动，需要更细粒度的物理步进防止抖动和穿模。
+
+### 杂项修复
+
+- **NumberPop Bug 修复**：`SpawnActor` 使用的 `NewRequest.WorldLocation` 改为 `NumberLocation`（已叠加随机偏移的坐标），随机偏移之前计算了但未使用
+- **HitBox 重构**：`UYMRPGHitBox` → `AYMRPGHitBox`（修正 Actor 前缀），`HitBoxComponent` → `HitCollisionBox`（命名一致），`FhitResult` → `FHitResult`（大小写），`Buffers` → `Buffs`（拼写），HandleDamage 增加自伤过滤 + GAS 事件发送
 
 </details>

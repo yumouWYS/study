@@ -36,7 +36,7 @@ void UYMRPGNumberPopComponent_UMG::AddNumberPop(const FYMRPGNumberPopRequest& Ne
 
 	if (UWorld* LocalWorld = GetWorld())
 	{
-		AYMRPGNumberPopActor* PopActor = LocalWorld->SpawnActor<AYMRPGNumberPopActor>(NumberPopActorClass, NewRequest.WorldLocation, FRotator::ZeroRotator);
+		AYMRPGNumberPopActor* PopActor = LocalWorld->SpawnActor<AYMRPGNumberPopActor>(NumberPopActorClass, NumberLocation,  FRotator::ZeroRotator);
 
 		PopActor->UpdateNum(FText::FromString(FString::FromInt(NewRequest.NumberToDisplay)));
         PopActor->UpdateNumColor(NewRequest.ColorToDisplay);

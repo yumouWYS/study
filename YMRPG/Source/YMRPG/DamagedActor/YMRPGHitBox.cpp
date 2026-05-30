@@ -5,65 +5,103 @@
 #include "YMRPGCharacterBase.h"
 #include "Abilities/GameplayAbilityTypes.h"
 
-UYMRPGHitBox::UYMRPGHitBox(const FObjectInitializer& ObjectInitializer)
+AYMRPGHitBox::AYMRPGHitBox(const FObjectInitializer& ObjectInitializer)
 {
     PrimaryActorTick.bCanEverTick = false;
 
     HitCollisionRootComponent= CreateDefaultSubobject<USceneComponent>(TEXT("HitCollisionRootComponent"));
     RootComponent = HitCollisionRootComponent;
 
-    HitBoxComponent = CreateDefaultSubobject<UBoxComponent>(TEXT("HitBoxComponent"));
-    HitBoxComponent->SetupAttachment(HitCollisionRootComponent);
+    HitCollisionBox = CreateDefaultSubobject<UBoxComponent>(TEXT("HitBoxComponent"));
+    HitCollisionBox->SetupAttachment(HitCollisionRootComponent);
 
     InitialLifeSpan = 4.f;
     bNetLoadOnClient = false;
     bReplicates = false;
 }
 
-void UYMRPGHitBox::HandleDamage(
+void AYMRPGHitBox::HandleDamage(
     UPrimitiveComponent* OverlappedComponent,
     AActor* OtherActor,
     UPrimitiveComponent* OtherComponent,
     int32 OtherBodyIndex,
     bool bFromSweep,
-    const FhitResult& SweepResult)
+    const FHitResult& SweepResult
+)
 {
-
-}
-
-UPrimitiveComponent* UYMRPGHitBox::GetHitDamage() const
-{
-    return HitBoxComponent;
-}
-
-void UYMRPGHitBox::SetHitDamageRelativePosition(const FVector& InNewPosition)
-{
-    if (HitBoxComponent)
+    if (GetInstigator() == OtherActor)
     {
-        HitBoxComponent->SetRelativeLocation(InNewPosition);
+        return;
+    }
+    if (AYMRPGCharacterBase* InPawn = Cast<AYMRPGCharacterBase>(GetInstigator()))
+    {
+        if (AYMRPGCharacterBase* InTarger = Cast<AYMRPGCharacterBase>(OtherActor))
+        {
+            if (!InPawn->IsNetMode(ENetMode::NM_Client))
+            {
+                //传给GAS的事件数据
+                FGameplayEventData EventData;
+                EventData.Instigator = GetInstigator();
+                EventData.Target = InTarger;
+
+                if (IsExist(InTarger))
+                {
+                    return;
+                }
+
+                if (!Buffs.IsEmpty())
+                {
+                    for (auto& Tmp : Buffs)
+                    {
+                        UAbilitySystemBlueprintLibrary::SendGameplayEventToActor(GetInstigator(), Tmp.Last(), EventData);
+                    }
+                }
+
+                AttackedCharacters.AddUnique(InTarger);
+            }
+        }
     }
 }
 
-void UYMRPGHitBox::SetBoxExtent(const FVector& InNewBoxExtent)
+UPrimitiveComponent* AYMRPGHitBox::GetHitDamage() const
 {
-    if (HitBoxComponent)
+    return HitCollisionBox;
+}
+
+void AYMRPGHitBox::SetHitDamageRelativePosition(const FVector& InNewPosition)
+{
+    if (HitCollisionBox)
     {
-        HitBoxComponent->SetBoxExtent(InNewBoxExtent);
+        HitCollisionBox->SetRelativeLocation(InNewPosition);
     }
 }
 
-bool UYMRPGHitBox::IsExist(AYMRPGCharacterBase* InCharacter) const
+void AYMRPGHitBox::SetBoxExtent(const FVector& InNewBoxExtent)
+{
+    if (HitCollisionBox)
+    {
+        HitCollisionBox->SetBoxExtent(InNewBoxExtent);
+    }
+}
+
+bool AYMRPGHitBox::IsExist(AYMRPGCharacterBase* InCharacter) const
 {
     return AttackedCharacters.Contains(InCharacter);
 }
 
-void UYMRPGHitBox::BeginPlay()
+void AYMRPGHitBox::BeginPlay()
 {
     Super::BeginPlay();
 
+    if (UPrimitiveComponent* HitComponent = GetHitDamage())
+    {
+        HitComponent->SetHiddenInGame(true);
+        HitComponent->OnComponentBeginOverlap.AddDynamic(this, &AYMRPGHitBox::HandleDamage);
+    }
+
 }
 
-void UYMRPGHitBox::Tick(float DeltaTime)
+void AYMRPGHitBox::Tick(float DeltaTime)
 {
     Super::Tick(DeltaTime);
 }
