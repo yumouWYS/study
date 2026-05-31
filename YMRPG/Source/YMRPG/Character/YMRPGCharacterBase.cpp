@@ -85,6 +85,11 @@ bool AYMRPGCharacterBase::HasAnyMatchingGameplayTags(const FGameplayTagContainer
 	return false;
 }
 
+void AYMRPGCharacterBase::ClientRPCFunction_Implementation(FGameplayTagContainer OutAbilityTag, float CoolDownTime)
+{
+	AbilityCoolDownDelegate.Broadcast(OutAbilityTag, CoolDownTime);
+}
+
 void AYMRPGCharacterBase::BeginPlay()
 {
 	Super::BeginPlay();
@@ -113,6 +118,17 @@ void AYMRPGCharacterBase::BeginPlay()
 		DeathAbilityCDOSpec.SourceObject = this;
 
 		DeathAbilityHandle = AbilityComponent->GiveAbility(DeathAbilityCDOSpec);
+
+
+		AbilityComponent->AbilityCommittedCallbacks.AddLambda([this](UGameplayAbility* InGameplayAbility) {
+
+			float CoolDownTime = InGameplayAbility->GetCooldownTimeRemaining();
+
+			FGameplayTagContainer AbilityTags = InGameplayAbility->AbilityTags;
+
+			ClientRPCFunction(AbilityTags, CoolDownTime);
+
+			});
 	}
 
 	HealthComponent->InitializeWithAbilitySystem(AbilityComponent);

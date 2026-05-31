@@ -16,7 +16,8 @@
 - [2026-05-24](#ymrpg-2026-05-24) — GAS 引擎源码蒸馏项目：Skill 架构设计（单入口 + 多 reference）、子系统拆分粒度、双层知识模型（现有 Skill"怎么做" vs 蒸馏 Skill"为什么这样做"）、4 步制作流程（测绘→深读→合成→验证）、7 章模板确立
 - [2026-05-26](#ymrpg-2026-05-26) — PlayerController 服务器/客户端分布、GameplayEffectContext 传递 HitResult（蓝图 Context 引脚悬空排错、UWidgetComponent 继承链详解、InitialLifeSpan 原理与不生效条件
 - [2026-05-27](#ymrpg-2026-05-27) — NumberPop 伤害数字四层架构、增强输入系统 IA/IMC/绑定与四重解耦、IMC 按键冲突场景（AccumulationBehavior / bConsumeInput / Priority）、IMC 动态激活取消（Add/RemoveMappingContext + CountRegistrations）
-- [2026-05-31](#ymrpg-2026-05-31) — SpawnActorDeferred 两阶段生成、WaitGameplayEvent 触发机制（HandleGameplayEvent 三阶段分发）、DamageExecution_Defense 完整代码走读与攻防公式修正、PreInitCollision 七类碰撞抛体配置、bIsHomingProjectile 追踪原理
+- [2026-05-30](#ymrpg-2026-05-30) — SpawnActorDeferred 两阶段生成、WaitGameplayEvent 触发机制（HandleGameplayEvent 三阶段分发）、DamageExecution_Defense 完整代码走读与攻防公式修正、PreInitCollision 七类碰撞抛体配置、bIsHomingProjectile 追踪原理
+- [2026-05-31](#ymrpg-2026-05-31) — GE Duration 三种策略与两轮计算、GE Components 模块化组件体系（11 个内置组件 + 4 生命周期钩子）、RPC 三方向与 Reliable/Unreliable、按键在不同状态下的行为分流三方案、GA Tag 检查只认 ASC 的源码证明、玩家状态机管理组件的设计模式
 
 ---
 
@@ -2322,9 +2323,11 @@ IMC 资产上的 `Registration Tracking Mode`：
 
 </details>
 
+---
+
 <details>
-<summary><b>2026-05-31</b></summary>
-## 2026-05-31 — SpawnActorDeferred、WaitGameplayEvent 触发、DamageExecution 攻防公式、HitBox 碰撞体系
+<summary><b>2026-05-30</b></summary>
+## 2026-05-30 — SpawnActorDeferred、WaitGameplayEvent 触发、DamageExecution 攻防公式、HitBox 碰撞体系
 
 ### SpawnActorDeferred — 延迟 Actor 生成
 
@@ -2451,5 +2454,173 @@ FVector HomingAcceleration =
 
 - **NumberPop Bug 修复**：`SpawnActor` 使用的 `NewRequest.WorldLocation` 改为 `NumberLocation`（已叠加随机偏移的坐标），随机偏移之前计算了但未使用
 - **HitBox 重构**：`UYMRPGHitBox` → `AYMRPGHitBox`（修正 Actor 前缀），`HitBoxComponent` → `HitCollisionBox`（命名一致），`FhitResult` → `FHitResult`（大小写），`Buffers` → `Buffs`（拼写），HandleDamage 增加自伤过滤 + GAS 事件发送
+
+</details>
+
+---
+
+<details>
+<summary><b>2026-05-31</b></summary>
+
+## 2026-05-31 — GE Duration 策略、GE Components 组件体系、RPC 网络语义、状态机管理组件
+
+### GE Duration — 三种 DurationPolicy
+
+`EGameplayEffectDurationType` 三个值（`GameplayEffect.h:663`）：
+
+| 策略 | Duration 常量值 | 含义 |
+|---|---|---|
+| `Instant` | `INSTANT_APPLICATION` = **0.f** | 立即执行一次，不残留 |
+| `Infinite` | `INFINITE_DURATION` = **-1.f** | 永久存在，直到手动移除 |
+| `HasDuration` | 正浮点数 | 持续指定秒数，到期自动移除 |
+
+`-1.f` 作为"永久"标记，所有算剩余时间的地方先检查是否为 -1，是就直接返回 -1。
+
+**Duration 的四种计算方式**（`DurationMagnitude` 是 `FGameplayEffectModifierMagnitude`，与 Modifier 共用计算框架）：
+
+| 计算方式 | 说明 | Duration 场景举例 |
+|---|---|---|
+| `ScalableFloat` | 固定值，可随等级曲线缩放 | 眩晕 3 秒 |
+| `AttributeBased` | 基于属性的值（系数 × 属性 + 偏移） | 减速持续 = 0.1 × 施法者智力 |
+| `CustomCalculationClass` | MMC 子类，可捕获多属性 | 护盾持续 = 基于最大生命值和护甲值 |
+| `SetByCaller` | 代码/蓝图创建 Spec 时动态传入 | 法术反射：反射原始技能的剩余时间 |
+
+**Duration 计算的两轮时机**：
+
+- **第一轮 `SetLevel` 时**（`GameplayEffect.cpp:1808`）：用 CDO 上的 `DurationMagnitude` 初步计算，`bLockDuration = false` 允许后续修改。此时目标 ASC 属性未捕获，结果可能不准确
+- **第二轮 `ApplyGameplayEffectSpecToTarget` 时**（`GameplayEffect.cpp:4198`）：注释写"Re-calculate the duration, as it could rely on target captured attributes"。调用 `CalculateModifiedDuration` 叠加 Outgoing/Incoming Duration 修饰器，最终 `SetDuration(FinalDuration, true)` 锁定
+
+**`CalculateModifiedDuration`**（`GameplayEffect.cpp:1849`）：Duration 本身可被其他 GE 修改：
+
+```
+FAggregator 收集:
+  ├─ Outgoing Duration Capture（施法者身上的 Duration Mod）→ "我施放的控制技能持续 +20%"
+  └─ Incoming Duration Capture（受击者身上的 Duration Mod）→ "我受到的控制持续 -30%"
+
+EvaluateWithBase(Base值, Params) → 最终 Duration
+```
+
+**Clamp 下限**（`GameplayEffect.cpp:4217`）：`FinalDuration <= 0` 时强保 0.1 秒，不能被 mod 成 Instant。
+
+**Duration 锁定机制**：`bDurationLocked` 防覆写。`SetLevel` 传 `false`（不锁），`ApplyGameplayEffectSpecToTarget` 第二次传 `true`（锁）。
+
+**TimerManager 到期执行**（`GameplayEffect.cpp:4228`）：`TimerManager.SetTimer(DurationHandle, CheckDurationExpired, FinalDuration)`，不是每帧 Tick 倒计时。
+
+**Period**：与 Duration 正交。`bExecutePeriodicEffectOnApplication` 控制是否施加时立即执行一次。`Instant + Period > 0` 是合法组合（`HasPeriodAndNoDuration`），只走 Period Timer 不走 Duration Timer。
+
+**Stacking Duration 策略**：`RefreshOnSuccessfulApplication` 刷新重置；`NeverRefresh` 保持原到期时间。
+
+### GE Components — 模块化 GE 行为组件系统
+
+UE 5.3 引入，将原来 `UGameplayEffect` 单体类拆为可插拔组件。
+
+**基类 `UGameplayEffectComponent`**（`GameplayEffectComponent.h:32`）：
+
+```cpp
+UCLASS(Abstract, Const, DefaultToInstanced, EditInlineNew, CollapseCategories, Within=GameplayEffect)
+```
+
+关键说明符：`Const`（所有实例共享，不存运行时状态）、`DefaultToInstanced`（蓝图添加时自动实例化）、`Within=GameplayEffect`（Outer 必须是 GE）。
+
+**四个生命周期钩子**（`GameplayEffect.cpp:881-935` 遍历 `GEComponents` 数组统一分发）：
+
+| 钩子 | 触发时机 | 返回值含义 |
+|---|---|---|
+| `CanGameplayEffectApply` | GE 应用前 | `false` → 整个 GE 被拒绝 |
+| `OnActiveGameplayEffectAdded` | Duration/Infinite GE 加入 ActiveGEs | `false` → 抑制 (Inhibited) |
+| `OnGameplayEffectExecuted` | Instant GE / Period GE 每周期 | 仅 ROLE_Authority |
+| `OnGameplayEffectApplied` | GE 成功应用（初始+堆叠） | 周期执行和复制不触发 |
+
+**11 个内置 Component**：
+
+| 类别 | Component | 职责 |
+|---|---|---|
+| 准入控制 | `ChanceToApplyGameplayEffectComponent` | 概率应用 |
+| 准入控制 | `CustomCanApplyGameplayEffectComponent` | 自定义应用条件（`UGameplayEffectCustomApplicationRequirement`） |
+| 准入/持续控制 | `TargetTagRequirementsGameplayEffectComponent` | 三层 Tag 条件：Application / Ongoing / Removal |
+| 奖励/附加 | `AbilitiesGameplayEffectComponent` | GE 活跃期间授予 GA |
+| 奖励/附加 | `AdditionalEffectsGameplayEffectComponent` | 附带应用/完成时触发其他 GE |
+| 防御 | `ImmunityGameplayEffectComponent` | 注册全局拦截器阻止匹配 Query 的 GE |
+| 防御 | `RemoveOtherGameplayEffectComponent` | 应用时移除目标身上匹配的 GE |
+| Tag 管理 | `TargetTagsGameplayEffectComponent` | 授予目标标签（`InheritableGrantedTagsContainer`） |
+| Tag 管理 | `BlockAbilityTagsGameplayEffectComponent` | 阻止带特定标签的 GA 激活 |
+| Tag 管理 | `AssetTagsGameplayEffectComponent` | GE 资产自身标签（不给目标，用于 Query 匹配） |
+| UI | `UGameplayEffectUIData` | 编辑器/UI 显示元数据 |
+
+**关键设计约束**：Component 是 Const 对象不能存运行时状态（状态放 `FGameplayEffectSpec` 或 `FActiveGameplayEffect`）；同一类型只能有一个（`IsDataValid` 默认实现检查重复）；目前仅 C++ 可创建新 Component（非蓝图可扩展）。
+
+**设计理念**：策略模式 + 组合优于继承。功能 = 积木自由组合，添加新功能只需写新 Component，不修改 `UGameplayEffect` 本体。
+
+### UFUNCTION(BlueprintCallable, Client, Reliable) — RPC 网络语义
+
+**三种 RPC 方向**（`Script.h`）：
+
+| 说明符 | 方向 | 谁调 → 谁执行 | 引擎 flag |
+|---|---|---|---|
+| `Server` | 客户端 → 服务器 | 客户端调，服务器执行 | `FUNC_NetServer` |
+| `Client` | 服务器 → 拥有客户端 | 服务器调，拥有该 Actor 的**一个**客户端执行 | `FUNC_NetClient` |
+| `NetMulticast` | 服务器 → 所有客户端 | 服务器调，所有客户端执行 | `FUNC_NetMulticast` |
+
+**Reliable vs Unreliable**：
+
+| 类型 | 行为 |
+|---|---|
+| `Reliable` | 保证送达、保证顺序。丢包重发 |
+| 默认（不写） | 不保证送达。带宽紧张时直接丢弃 |
+
+`NetMulticast` 没有可靠版本——多播保证送达成本过高。UE 设计哲学：多播走不可靠，状态同步靠属性复制。
+
+**`BlueprintCallable` + `Client` + `Reliable` 协同**：服务器蓝图中调用 → 引擎拦下（服务器不执行函数体）→ 参数打包 → 可靠通道发往拥有该 Actor 的客户端 → 客户端解包执行。
+
+**关键约束**：Client RPC 只能从服务器调用，且目标 Actor 必须有拥有连接（否则静默丢弃）。
+
+### 同一按键在不同状态下行为不同的三种方案
+
+**方案一：动态切换 IMC** — 改变"按键→意图"映射。适合 UI 模式切换（游戏→菜单），不适合玩法状态——破坏了意图与按键分离。
+
+**方案二：动态授予/移除 GA** — `GiveAbility` / `ClearAbility` 涉及 Spec 构造、`ABILITYLIST_SCOPE_LOCK` 延迟变更、网络复制，非零成本。适合低频大规模行为切换（上马/下马、进入载具）。
+
+**方案三：`ActivationBlockedTags` / `ActivationRequiredTags`** — GA CDO 上配置，`DoesAbilitySatisfyTagRequirements`（`GameplayAbility.cpp:316`）自动检查，7 层 Tag 检查。零运行时开销，纯数据配置。
+
+**选择原则**：能用 Tag 阻挡解决的，不要动 GA 的授予/移除。IMC 不要热切换来做玩法状态。
+
+### GA Tag 检查只认 ASC — 源码证据
+
+`DoesAbilitySatisfyTagRequirements` 只查两个来源（`GameplayAbility.cpp:374-386`）：
+
+```cpp
+CheckForBlocked(AbilitySystemComponent.GetOwnedGameplayTags(), ActivationBlockedTags);
+CheckForRequired(AbilitySystemComponent.GetOwnedGameplayTags(), ActivationRequiredTags);
+```
+
+`GetOwnedGameplayTags()` 返回 `GameplayTagCountContainer.GetExplicitGameplayTags()`（`AbilitySystemComponent.h:597`）——即 ASC 的 LooseGameplayTags。
+
+Character 上自定义的 `FGameplayTagContainer` 成员变量，GAS 框架不会帮你查。需要被 GAS 框架感知的 Tag 必须放 ASC。GE 通过 `GrantedTags` 授予的 Tag 也写入 `GameplayTagCountContainer`，所以能被感知。
+
+### 玩家状态机管理组件的设计模式
+
+**架构**：状态机做决策，ASC 做存储。
+
+```
+UPlayerStateMachineComponent (管理者：转换规则、守卫、进入/退出回调)
+  │ AddReplicatedLooseGameplayTag / RemoveReplicatedLooseGameplayTag
+  ▼
+ASC.GameplayTagCountContainer (存储器：GAS 框架唯一查询源)
+  ▼
+GA / GE / Cue 消费
+```
+
+**不自建 `FGameplayTagContainer`**：两份数据 = 同步负担，且框架只认 ASC。
+
+**Tag 管理的两套 API**：
+
+| API | 复制 | 使用场景 |
+|---|---|---|
+| `AddLooseGameplayTag` | 不复制 | 纯客户端本地 Tag（UI 状态） |
+| `AddReplicatedLooseGameplayTag` | 自动复制到所有客户端 | 玩法状态（服务器调） |
+
+**预测**：状态机本身不需要单独预测。如果状态切换由 GA 触发，GA 的 `LocalPredicted` 已覆盖预测窗口。客户端临时写 `LooseGameplayTag`，服务器复制到达后覆盖最终一致。
+
+**与 HealthComponent 的同构**：`UYMRPGHealthComponent` 就是死亡状态的状态机管理组件——枚举 `EYMRPGDeathState`（NotDead→DeathStarted→DeathFinished）、转换守卫、Tag 输出（`Status.Death.Dying` / `Status.Death.Dead`）、事件广播。玩家通用状态机遵循完全相同的模式，只需替换枚举、Tag 映射、转换规则。
 
 </details>

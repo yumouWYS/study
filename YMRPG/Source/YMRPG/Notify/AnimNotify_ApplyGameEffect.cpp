@@ -28,12 +28,6 @@ void UAnimNotify_ApplyGameEffect::Notify(USkeletalMeshComponent* MeshComp, UAnim
 
 			AYMRPGCharacterBase* CheckCharacter = Cast<AYMRPGCharacterBase>(InCharacter);
 
-			//在编辑器下预览时，不会转化为AYMRPGCharacterBase* ，这时会有旋转问题，所以需要修正
-			if (!CheckCharacter)
-			{
-				ComponentRotation += FRotator(0, 90, 0);
-			}
-
 			FTransform Transform((ComponentRotation + RotationOffset).Quaternion(), ComponentLocation);
 
 			FString VForward = ComponentLocation.ToString();//可以用于打日志

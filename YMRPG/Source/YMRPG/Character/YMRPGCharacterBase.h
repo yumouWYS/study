@@ -29,6 +29,9 @@ class UYMRPGGameplayAbility;
 class UYMRPGCharacterAttributeSet;
 class UYMRPGHealthComponent;
 
+
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FGenericAbilityCollDownDelegate, FGameplayTagContainer, OutAbilityTag, float, CollDownTime);
+
 UCLASS(Abstract)
 class YMRPG_API AYMRPGCharacterBase : public ACharacter, public IAbilitySystemInterface, public IGameplayCueInterface, public IGameplayTagAssetInterface
 {
@@ -61,7 +64,17 @@ public:
 	virtual bool HasAllMatchingGameplayTags(const FGameplayTagContainer& TagContainer) const override;
 	virtual bool HasAnyMatchingGameplayTags(const FGameplayTagContainer& TagContainer) const override;
 
+
+public:
+
+	UPROPERTY(BlueprintAssignable)
+	FGenericAbilityCollDownDelegate AbilityCoolDownDelegate;
+
 protected:
+	UFUNCTION(BlueprintCallable, Client, Reliable)
+	void ClientRPCFunction(FGameplayTagContainer OutAbilityTag, float CoolDownTime);
+
+
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
