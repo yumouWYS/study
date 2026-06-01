@@ -14,4 +14,10 @@ public:
 	UYMRPGAssetManager();
 
 	virtual void StartInitialLoading() override;
+
+	static const FPrimaryAssetType PotionItemType;
+	static const FPrimaryAssetType TokenItemType;
+	static const FPrimaryAssetType EquipmentItemType;
+
+	class UYMRPGItem* ForceLoadItem(const FPrimaryAssetId& PrimaryAssetId, bool bLogWarning = true);
 };

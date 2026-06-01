@@ -11,7 +11,7 @@ bool UYMRPGItem::IsConsumable() const
 
 FString UYMRPGItem::GetIdentifierString() const
 {
-	return GetPrimaryAssetId.ToString();
+	return GetPrimaryAssetId().ToString();
 }
 
 FPrimaryAssetId UYMRPGItem::GetPrimaryAssetId() const
