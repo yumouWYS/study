@@ -6,6 +6,7 @@
 #include "YMRPGComboComponent.h"
 #include "YMRPGCharacterAttributeSet.h"
 #include "YMRPGHealthComponent.h"
+#include "YMRPGInventoryComponent.h"
 
 #include "Components/CapsuleComponent.h"
 #include "GameFramework/CharacterMovementComponent.h"
@@ -30,6 +31,10 @@ AYMRPGCharacterBase::AYMRPGCharacterBase(const FObjectInitializer& ObjectInitial
 	HealthComponent->SetIsReplicated(true);
 	HealthComponent->OnDeathStarted.AddDynamic(this, &ThisClass::OnDeathStarted);
 	HealthComponent->OnDeathFinished.AddDynamic(this, &ThisClass::OnDeathFinished);
+
+	InventoryComponent = CreateDefaultSubobject<UYMRPGInventoryComponent>(TEXT("InventoryComponent"));
+	InventoryComponent->SetIsReplicated(true);
+
 
 	NetUpdateFrequency = 100.f;
 }
@@ -85,9 +90,27 @@ bool AYMRPGCharacterBase::HasAnyMatchingGameplayTags(const FGameplayTagContainer
 	return false;
 }
 
+void AYMRPGCharacterBase::CallServerDownLoadInfo_Implementation()
+{
+	if(InventoryComponent)
+	{
+		InventoryComponent->CallServerDownLoadInfo();
+	}
+}
+
+
+
 void AYMRPGCharacterBase::ClientRPCFunction_Implementation(FGameplayTagContainer OutAbilityTag, float CoolDownTime)
 {
 	AbilityCoolDownDelegate.Broadcast(OutAbilityTag, CoolDownTime);
+}
+
+void AYMRPGCharacterBase::ActiveSkillByInventoryId_Implementation(int32 InInventryId)
+{
+	if (InventoryComponent)
+	{
+		InventoryComponent->ActiveSkillByInventoryId(InInventryId);
+	}
 }
 
 void AYMRPGCharacterBase::BeginPlay()

@@ -1,16 +1,16 @@
-# YMRPG 学习日志 — 2026 年 6 月
+# 学习日志
 
-> UE 5.6 GAS 游戏玩法系统学习与实战开发
-
----
+记录每日有技术价值的提问与对应知识点，按日期归档，方便检索复习。
 
 ## 目录
 
-</details>
+- [2026-06-01](#ymrpg-2026-06-01) — UPrimaryDataAsset 继承链 、 UHT Category 引号规则 、 UBT 同名冲突 、 物品系统
+- [2026-06-06](#ymrpg-2026-06-06) — RPC 调用链源码分析、WithValidation、属性复制管线、ReplicatedUsing 机制、Component 子对象复制、背包系统网络架构
 
 ---
 
-## 6.1：UPrimaryDataAsset 继承链 / UHT Category 引号规则 / UBT 同名冲突 / 物品系统
+<details>
+<summary><b>2026-06-01</b></summary>
 
 ### UPrimaryDataAsset 完整继承链
 
@@ -92,5 +92,159 @@ Equipment  Potion    Token
 
 - 删除 26 个中文名 txt 占位文件（"新建 文本文档" 及副本），替换为 `Placeholder{N}.txt`
 - 修复 `YMRPGItem.cpp:14`：`GetPrimaryAssetId.ToString()` → `GetPrimaryAssetId().ToString()`（缺少函数调用括号）
+
+</details>
+
+---
+
+<details>
+<summary><b>2026-06-06</b></summary>
+
+### RPC 完整调用链——源码逐层追踪
+
+之前（5.31）学了三方向 + Reliable/Unreliable 基础，今天追源码走完一条 RPC 的完整路径。
+
+**调用链五步**（以 `ServerTryActivateAbility` 为例）：
+
+```
+客户端调用 Server RPC
+  → UHT 生成的 exec* thunk 拦截
+  → GetFunctionCallspace() 判定走 Local 还是 Remote
+  → CallRemoteFunction() → ProcessRemoteFunction()
+  → 序列化参数到 Bunch → Actor Channel 发送
+  → 服务器收包 → 反序列化 → 调 _Implementation
+```
+
+**`GetFunctionCallspace` 决策树**（`Actor.cpp:5396-5594`）：
+
+| 判定条件 | 结果 |
+|---|---|
+| `NetMode == NM_Standalone` | Local（单机直接本地执行） |
+| `FUNC_NetMulticast` + 服务器 | `Local \| Remote`（本地执行 + 广播） |
+| `FUNC_NetServer` + 客户端 | Remote（发往服务器） |
+| `FUNC_NetClient` + 服务器 | Remote（发往拥有客户端） |
+| Server RPC + 服务器上调 | **Local**（不经过网络，直接执行） |
+| Client RPC + 客户端上调 | **Local**（同上） |
+
+**关键源码**（`Actor.cpp:5506-5523`）：服务器调 Server RPC = 走 `Callspace`（Local），因为 `bIsServer && !(FUNC_NetClient)`。Listen Server 和 Standalone 的天然优化。
+
+**`ProcessRemoteFunction`**（`NetDriver.cpp:7795-7936`）：
+- Server RPC 路径：`Actor->GetNetConnection()` 找拥有连接 → `InternalProcessRemoteFunction` 序列化发送
+- Multicast RPC 路径：遍历所有客户端连接 → 对每个调用 `IsNetRelevantFor` 检查相关性 → 相关则发送
+- **Multicast 不保证可靠**——UE 设计哲学：多播用于表现层，状态同步靠属性复制
+
+### WithValidation 机制
+
+声明 `UFUNCTION(Server, reliable, WithValidation)` → UHT 额外生成 `_Validate` 函数。
+
+**执行顺序**：服务器收到 RPC → 先调 `_Validate` → 返回 false 则断开客户端（反作弊） → 返回 true 才调 `_Implementation`。
+
+**设计原则**：Validate 放"一眼判定作弊"的检查（参数范围、权限），不放复杂业务逻辑。GAS 的 `ServerTryActivateAbility_Validate` 直接 `return true`——复杂验证交给 PredictionKey 机制。
+
+### RPC vs 属性复制——三个维度的本质区别
+
+| | RPC | 属性复制 |
+|---|---|---|
+| **语义** | "做一件事"（事件驱动） | "状态变成 X"（状态同步） |
+| **状态追踪** | 无 ShadowState | ShadowState 比较差异，增量发送 |
+| **Late Join** | 不重放历史 RPC | 自动初次复制当前值 |
+| **底层入口** | `ProcessRemoteFunction` | `FRepLayout::ReplicateProperties` |
+| **适用场景** | 开火、跳跃、激活技能 | 血量、等级、Tag 容器 |
+
+**记忆口诀**：
+- 属性复制 = 同步水位高度（持续性状态，晚来的船也能看到当前水位）
+- RPC = 按一下喇叭（一次性事件，后来的人听不到）
+
+### AttributeSet 属性复制——两层机制
+
+ASC 用两个 UPROPERTY 完成属性同步：
+
+**第一层：`SpawnedAttributes`**——`ReplicatedUsing = OnRep_SpawnedAttributes`（`AbilitySystemComponent.h:1957`）。复制 AttributeSet 对象列表。客户端收到后清理旧 Aggregator 或切换到服务器权威对象。
+
+**第二层：`ActiveGameplayEffects`**——`FActiveGameplayEffectsContainer : FFastArraySerializer`（`GameplayEffect.h:1621`），`TStructOpsTypeTraits` 标记 `WithNetDeltaSerializer = true`。这才是属性**数值**的复制通道：
+
+```
+服务器：GE.Apply → Modifier 计算 → Aggregator 更新 CurrentValue
+  → ActiveGameplayEffects 标记 dirty
+  → NetDeltaSerialize 只序列化变化的 GE 条目
+  → 发往客户端
+
+客户端：收到增量 → PostReplicatedAdd/Change
+  → 重新构建 Aggregator → 重新计算 CurrentValue → 值同步
+```
+
+**结论**：属性数值通过 GE 聚合器的增量序列化同步，不是直接复制 `FGameplayAttributeData::CurrentValue` 的 float。
+
+### Component::SetIsReplicated — 子对象属性复制通道
+
+`SetIsReplicated(true)` 走的是**属性复制体系中的子对象复制**，不是 RPC。
+
+**完整路径**：
+1. `SetIsReplicated(true)` → `bReplicates = true` + `UpdateReplicatedComponent(this)`
+2. `UpdateReplicatedComponent` → 加入 Actor 的 `ReplicatedComponents` + `ReplicatedComponentsInfo`
+3. `UActorChannel::ReplicateActor()` 每帧遍历 `ReplicatedComponents` → `WriteSubObjectInBunch` → **调 Component 自己的 `FRepLayout::ReplicateProperties`**（和 Actor 属性复制同管线）
+4. 首次创建子对象指令 → 后续增量属性复制 → `CallRepNotifies`
+
+**三层网络机制的完整分类**：
+
+| | RPC | Actor 属性复制 | Component 子对象复制 |
+|---|---|---|---|
+| **入口** | `UFUNCTION(Server/Client/NetMulticast)` | `UPROPERTY(Replicated)` | `SetIsReplicated(true)` |
+| **底层** | `ProcessRemoteFunction` | `FRepLayout::ReplicateProperties` | 同左 |
+| **Late Join** | 不重放 | 自动初始复制 | 自动初始复制 |
+
+### ReplicatedUsing (RepNotify) — 复制管线第三阶段的回调钩子
+
+不是独立的同步机制，而是属性复制管线在客户端的回调钩子。
+
+**属性复制三阶段**：
+1. **脏检测**（服务器）：ObjectData vs ShadowState 逐属性比较（Push Model 用 dirty bit 优化跳过）
+2. **序列化传输**：只发送差异属性
+3. **接收 + RepNotify**（客户端）：**先设置属性值，再调 OnRep 函数**
+
+源码证据（`RepLayout.cpp:4661-4790`）——`CallRepNotifies` 遍历 `RepState->RepNotifies` 列表，通过 `Object->ProcessEvent(RepNotifyFunc, ...)` 调用 OnRep 函数。OnRep 被调时属性值已经是最新的。
+
+### 背包系统网络架构
+
+今天对 `ActiveSkillByInventoryId`（Server RPC）和 `ClientRPCFunction`（Client RPC）做了完整的双向网络调用链逐行分析：
+
+**路径A：客户端使用物品**
+```
+客户端 UI_InventorySlot 点击
+  → ActiveSkillByInventoryId(InventoryId) [Server RPC]
+  → 参数由客户端提供（UI 格子的 InventoryId）
+  → 序列化 InventoryId → 网络
+
+服务器 _Implementation:
+  → InventoryComponent->ActiveSkillByInventoryId(InInventryId)
+  → 查 InventoryItems → 是 Potion → GiveAbility → TryActivateAbility
+  → GA 提交 → lambda → ClientRPCFunction(AbilityTags, CoolDownTime) [Client RPC]
+  → 参数由服务器提供（GA 实例的 AbilityTags + GetCooldownTimeRemaining()）
+
+客户端 _Implementation:
+  → AbilityCoolDownDelegate.Broadcast → UI 更新冷却
+```
+
+**路径B：服务器修改背包 → 属性复制自动推送**
+```
+服务器: AddInventoryItem → InventoryItems 变化
+  → 属性复制增量 → 客户端 OnRep_InventoryItems → delegate → UI 刷新
+```
+
+**路径C：UI 面板打开时初始刷新**
+```
+客户端: UI_InventoryPanel::NativeConstruct
+  → 绑定 OnInventoryItemChanged delegate
+  → 用客户端已有的 InventoryItems（之前属性复制来的）刷新 UI
+```
+
+### Bug 修复
+
+**C4458 编译错误**：`InventoryItemChanged_Implementation` 参数名 `InventoryItems` 与类成员变量 `InventoryItems` 同名。C++ 参数优先级高于成员变量，产生名称遮蔽。UE `/W4` + `/WX` 将 C4458 视为 Error。修复：参数改名 `InInventoryItems`（UE 惯例 `In` 前缀）。
+
+**代码问题记录**：
+- `CallServerDownLoadInfo` 命名误导：实际不经过网络，应改为 `RefreshInventoryUI`
+- `ActiveSkillByInventoryId` 缺少 `WithValidation`：客户端参数直接做数组下标无边界检查
+- `InventoryItemChanged` Client RPC 从未被服务器端调用：`OnRep_InventoryItems` 已覆盖属性复制刷新路径，该 RPC 可考虑删除
 
 </details>

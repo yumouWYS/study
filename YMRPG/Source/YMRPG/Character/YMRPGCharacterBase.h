@@ -23,11 +23,15 @@
 
 class UYMRPGComboComponent;
 class UYMRPGAbilitySystemComponent;
+
 class AYMRPGPlayerController;
 class AYMRPGPlayerState;
+
 class UYMRPGGameplayAbility;
 class UYMRPGCharacterAttributeSet;
 class UYMRPGHealthComponent;
+
+class UYMRPGInventoryComponent;
 
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FGenericAbilityCollDownDelegate, FGameplayTagContainer, OutAbilityTag, float, CollDownTime);
@@ -55,6 +59,9 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "YMRPG|Character")
 	FORCEINLINE UYMRPGHealthComponent* GetYMRPGHealthComponent() const { return HealthComponent; }
+	
+	UFUNCTION(BlueprintCallable, Category = "YMRPG|Character")
+	FORCEINLINE UYMRPGInventoryComponent* GetYMRPGInventoryComponent() const { return InventoryComponent; }
 
 	virtual UAbilitySystemComponent* GetAbilitySystemComponent() const override;
 
@@ -70,9 +77,17 @@ public:
 	UPROPERTY(BlueprintAssignable)
 	FGenericAbilityCollDownDelegate AbilityCoolDownDelegate;
 
+
+	UFUNCTION(Server, Reliable)
+	void ActiveSkillByInventoryId(int32 InInventryId);
+
+	UFUNCTION(Server, Reliable)
+	void CallServerDownLoadInfo();
+
 protected:
 	UFUNCTION(BlueprintCallable, Client, Reliable)
 	void ClientRPCFunction(FGameplayTagContainer OutAbilityTag, float CoolDownTime);
+
 
 
 	virtual void BeginPlay() override;
@@ -116,4 +131,7 @@ protected:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "YMRPG|GAS", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UYMRPGCharacterAttributeSet> CharacterSet;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "YMRPG|Character", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UYMRPGInventoryComponent> InventoryComponent;
 };

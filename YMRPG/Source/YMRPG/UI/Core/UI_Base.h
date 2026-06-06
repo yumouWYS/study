@@ -22,3 +22,15 @@ protected:
 
 	AYMRPGCharacterBase* UI_GetYMRPGCharacterBase() const;
 };
+
+UENUM(BlueprintType)
+enum class ESlotType : uint8
+{
+	//ÐÞ¸Ä
+	SlotType_None UMETA(DisplayName = "None_Type"),
+	SlotType_SkillPanelSlot UMETA(DisplayName = "SkillPanel_Slot"),
+	SlotType_InventorySlot UMETA(DisplayName = "Inventory_Slot"),
+	SlotType_EquipmentSlot UMETA(DisplayName = "Equipment_Slot"),
+
+
+};

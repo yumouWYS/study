@@ -16,7 +16,7 @@ public:
 
 public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "YMRPG|Potion")
-	TSubclassOf<UYMRPGGameplayAbility> PotionAbility;
+	TSubclassOf<UYMRPGGameplayAbility> GrantedAbility;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "YMRPG|Potion")
 	int32 AbilityLevel;
