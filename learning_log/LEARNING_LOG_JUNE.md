@@ -6,6 +6,7 @@
 
 - [2026-06-01](#ymrpg-2026-06-01) — UPrimaryDataAsset 继承链 、 UHT Category 引号规则 、 UBT 同名冲突 、 物品系统
 - [2026-06-06](#ymrpg-2026-06-06) — RPC 调用链源码分析、WithValidation、属性复制管线、ReplicatedUsing 机制、Component 子对象复制、背包系统网络架构
+- [2026-06-07](#ymrpg-2026-06-07) — Blueprint Timeline、AIGC 概念与提效、Git 团队管理模式、README 文档重写
 
 ---
 
@@ -246,5 +247,62 @@ ASC 用两个 UPROPERTY 完成属性同步：
 - `CallServerDownLoadInfo` 命名误导：实际不经过网络，应改为 `RefreshInventoryUI`
 - `ActiveSkillByInventoryId` 缺少 `WithValidation`：客户端参数直接做数组下标无边界检查
 - `InventoryItemChanged` Client RPC 从未被服务器端调用：`OnRep_InventoryItems` 已覆盖属性复制刷新路径，该 RPC 可考虑删除
+
+</details>
+
+---
+
+<details>
+<summary><b>2026-06-07</b></summary>
+
+### Blueprint Timeline — 时间驱动动画节点
+
+Timeline 是蓝图中的时间驱动插值工具，底层由两套机制配合：
+
+| 编译期 | 运行期 |
+|---|---|
+| `UTimelineTemplate`：存储轨道定义、曲线数据（蓝图节点编译时生成） | `FTimeline`：每帧 Tick，计算当前值，触发 Update/Finished 回调 |
+
+**Track 类型**：Float Track、Vector Track、Color Track、Event Track（一条 Timeline 可有多条轨道）。
+
+**Playback 控制**：Play / PlayFromStart / Stop / Reverse / SetNewTime / SetPlayRate，Length 由最长轨道曲线决定。
+
+**C++ 侧等效做法**：手动创建 `FTimeline`，通过 `AddInterpFloat` 绑定曲线 + `FOnTimelineFloat` 委托，在 `Tick` 中调 `TickTimeline(DeltaTime)`。蓝图 Timeline 本质是这套流程的自动生成封装。
+
+**常用场景**：开门/关门旋转动画、材质参数过渡、UI 缓动滑入/淡入、过场事件编排。
+
+### AIGC 概念与提效
+
+**AIGC = AI Generated Content**，用 AI 模型自动生成文本、图像、3D、代码、音频、视频等数字内容。
+
+**游戏开发的提效模式**：
+- 策划：ChatGPT 批量出 NPC 对话草稿 → 人力精修
+- 美术：Midjourney 出概念图 → 挑图细化
+- 程序：Claude Code 生成样板代码 → 人审查和改业务逻辑
+- 3D：Meshy / CSM 生成道具模型 → 美术调整
+
+**本质**："AI 出草稿，人做决策和精修"——把重复劳动交给 AI，人的精力集中在判断、设计、调优。
+
+**求职关联**：国内大厂普遍在推 AIGC 工具链融入美术/策划/程序管线。面试时结合具体的 GAS/AI 辅助开发经历说明 "AI 做了什么、我做了什么" 更有说服力。
+
+### Git 团队管理模式
+
+| 模型 | 特点 | 适用 |
+|---|---|---|
+| **Git Flow** | main + develop + feature/release/hotfix 多分支，按版本合并 | 有固定发布周期的中大型团队 |
+| **Trunk-Based** | 所有人往 main 高频合并，靠 Feature Flag 隐藏未完成功能 | 有完善 CI/CD + Feature Flag 体系的团队 |
+| **GitHub Flow** | 无 develop，feature → main → tag，比 Git Flow 简单 | 中小团队 |
+| **Fork-Based** | 每人 fork 个人副本，PR 合入主仓库 | 开源项目（Epic UE 源码也用此模型） |
+
+**UE 项目特殊性**：Trunk-Based 在 UE 项目中较痛苦——蓝图、关卡等二进制资产的冲突处理复杂，频繁合并不可行。国内 UE 游戏团队最常见 Git Flow 变体，配合 Git LFS 管理大文件，feature 分支按模块划分。
+
+### README 文档重写
+
+参考简历描述重写了 README.md：
+- 去掉"不依赖大模型生成代码"，改为"基于对架构的设计与掌握指导规范代码生成"
+- 新增项目文件目录讲解章节（靠前放置），逐目录说明模块职责
+- 更新进度：从 2 项勾选扩展到 10 项已完成 + 3 项待做
+- 新增网络架构表格（属性复制 / RPC / Component 子对象复制 / FFastArraySerializer）
+- 新增 AIGC 辅助开发章节（源码蒸馏→Skills、学习日志归档、代码生成模式）
 
 </details>

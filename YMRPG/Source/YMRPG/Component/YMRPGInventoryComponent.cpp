@@ -59,9 +59,9 @@ void UYMRPGInventoryComponent::ActiveSkillByInventoryId(int32 InventoryId)
 
 			FGameplayAbilitySpecHandle Handle = ASC->GiveAbility(FGameplayAbilitySpec(GA));
 
-			ASC->SetRemoveAbilityOnEnd(Handle);
-
 			ASC->TryActivateAbility(Handle);
+
+			ASC->SetRemoveAbilityOnEnd(Handle);
 		}
 		else if (UYMRPGEquipment* Equipment = Cast<UYMRPGEquipment>(InventoryItems[InventoryId].RPGItem))
 		{
